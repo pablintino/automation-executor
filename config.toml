@@ -1,0 +1,3 @@
+[database]
+driver="postgres"
+datasource="user=automation-executor dbname=automation-executor sslmode=disable password=12345 host=localhost"

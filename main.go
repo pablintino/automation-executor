@@ -10,6 +10,11 @@ import (
 	"github.com/containers/podman/v3/pkg/bindings/containers"
 	"github.com/containers/podman/v3/pkg/specgen"
 	docker "github.com/docker/docker/api/types"
+	"github.com/pablintino/automation-executor/internal/config"
+	"github.com/pablintino/automation-executor/internal/db"
+	"github.com/pablintino/automation-executor/internal/storage"
+	"github.com/pablintino/automation-executor/logging"
+	"gocloud.dev/blob/fileblob"
 	"os"
 )
 
@@ -22,7 +27,7 @@ func (mwc *MyWriteCloser) Close() error {
 	return nil
 }
 
-func main() {
+func main2() {
 	// Get Podman socket location
 	sock_dir := os.Getenv("XDG_RUNTIME_DIR")
 	if sock_dir == "" {
@@ -103,4 +108,70 @@ func main() {
 	if sessionInspect.ExitCode != 0 {
 		fmt.Println("Program execution failed")
 	}
+}
+
+func main3() {
+	options := &fileblob.Options{NoTempDir: true}
+	bucket, err := fileblob.OpenBucket("/home/pablintino/Sources/automation-executor/test", options)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer bucket.Close()
+
+	// We now have a *blob.Bucket! We can write our application using the
+	// *blob.Bucket type, and have the freedom to change the initialization code
+	// above to choose a different service-specific driver later.
+
+	// In this example, we'll write a blob and then read it.
+	ctx := context.Background()
+	if err := bucket.WriteAll(ctx, "foo.txt", []byte("Go Cloud Development Kit"), nil); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	b, err := bucket.ReadAll(ctx, "foo.txt")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	fmt.Println(string(b))
+}
+
+func main4() {
+	config, err := config.Configure()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	db.Connect(&config.DatabaseConfig)
+
+}
+
+func main() {
+	logging.Initialize(true)
+	config, err := config.Configure()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	container := storage.NewContainer(&config.ArtifactsConfig)
+	file, err := os.Open("/home/pablintino/Desktop/test.tar.gz")
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer func() {
+		file.Close()
+	}()
+	scanConfig, err := storage.NewScanConfig([]string{"*.json"})
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	result, err := container.ArtifactsScanner.ScanArchive(file, scanConfig)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	fmt.Println(result)
 }
