@@ -1,26 +1,55 @@
 package db
 
 import (
+	"database/sql"
+	"log"
+
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/pablintino/automation-executor/internal/config"
-	"log"
+	"github.com/pablintino/automation-executor/internal/models"
 )
 
-func Connect(config *config.DatabaseConfig) {
-	//connect to a PostgreSQL database
-	// Replace the connection details (user, dbname, password, host) with your own
-	db, err := sqlx.Connect(config.Driver, config.DataSource)
+type TasksDb interface {
+	GetAll() ([]models.TaskModel, error)
+	GetAllAnsible() ([]models.AnsibleTaskModel, error)
+}
+
+type Database interface {
+	Tasks() TasksDb
+}
+
+type SqlDatabase struct {
+	db      *sqlx.DB
+	config  *config.DatabaseConfig
+	tasksDb *SqlTasksDb
+}
+
+func NewSQLDatabase(config *config.DatabaseConfig) (*SqlDatabase, error) {
+	db, err := connect(config)
 	if err != nil {
 		log.Fatalln(err)
+		return nil, err
 	}
+	dbX := sqlx.NewDb(db, config.Driver)
+	return &SqlDatabase{
+		db:      dbX,
+		tasksDb: NewSqlTasksDb(dbX),
+		config:  config,
+	}, nil
+}
 
-	defer db.Close()
+func (s *SqlDatabase) Tasks() TasksDb {
+	return s.tasksDb
+}
 
-	// Test the connection to the database
+func connect(config *config.DatabaseConfig) (*sql.DB, error) {
+	db, err := sql.Open(config.Driver, config.DataSource)
+	if err != nil {
+		return nil, err
+	}
 	if err := db.Ping(); err != nil {
-		log.Fatal(err)
-	} else {
-		log.Println("Successfully Connected")
+		return nil, err
 	}
+	return db, nil
 }

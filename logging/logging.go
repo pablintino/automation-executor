@@ -1,8 +1,9 @@
 package logging
 
 import (
-	"go.uber.org/zap"
 	"log"
+
+	"go.uber.org/zap"
 )
 
 var (

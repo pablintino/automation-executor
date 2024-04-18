@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+
 	"github.com/knadh/koanf/parsers/toml"
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/file"
@@ -13,6 +14,10 @@ type DatabaseConfig struct {
 	Driver     string `koanf:"driver"`
 }
 
+type PodmanConfig struct {
+	Socket string `koanf:"socket"`
+}
+
 type ArtifactsConfig struct {
 	StoragePath string `koanf:"location"`
 	LoadSize    uint32 `koanf:"load-size"`
@@ -21,6 +26,7 @@ type ArtifactsConfig struct {
 type Config struct {
 	DatabaseConfig  DatabaseConfig  `koanf:"database"`
 	ArtifactsConfig ArtifactsConfig `koanf:"artifacts"`
+	PodmanConfig    PodmanConfig    `koanf:"podman"`
 }
 
 func Configure() (*Config, error) {

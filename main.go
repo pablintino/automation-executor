@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os"
+
 	"github.com/containers/podman/v3/libpod/define"
 	"github.com/containers/podman/v3/pkg/api/handlers"
 	"github.com/containers/podman/v3/pkg/bindings"
@@ -15,7 +17,6 @@ import (
 	"github.com/pablintino/automation-executor/internal/storage"
 	"github.com/pablintino/automation-executor/logging"
 	"gocloud.dev/blob/fileblob"
-	"os"
 )
 
 type MyWriteCloser struct {
@@ -27,7 +28,7 @@ func (mwc *MyWriteCloser) Close() error {
 	return nil
 }
 
-func main2() {
+func main123() {
 	// Get Podman socket location
 	sock_dir := os.Getenv("XDG_RUNTIME_DIR")
 	if sock_dir == "" {
@@ -40,10 +41,51 @@ func main2() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	s := specgen.NewSpecGenerator("localhost/tmp-ansible-container", false)
+
+	ssiD := "6a843e76877fefb71e4dc4c0b2ab5addbb7a8696eafaa7364e503d64a5419ed5"
+	sessionInspect, err := containers.ExecInspect(conn, ssiD, nil)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	fmt.Println(sessionInspect)
+	mwc := &MyWriteCloser{bufio.NewWriter(os.Stdout)}
+	defer mwc.Close()
+	startAndAttachOptions := new(containers.ExecStartAndAttachOptions)
+	startAndAttachOptions.WithOutputStream(mwc).WithAttachOutput(true)
+	startAndAttachOptions.WithErrorStream(mwc).WithAttachError(true)
+	err = containers.ExecStartAndAttach(conn, ssiD, startAndAttachOptions)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	sessionInspect, err = containers.ExecInspect(conn, ssiD, nil)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	if sessionInspect.ExitCode != 0 {
+		fmt.Println("Program execution failed")
+	}
+}
+
+func main33() {
+	// Get Podman socket location
+	sock_dir := os.Getenv("XDG_RUNTIME_DIR")
+	if sock_dir == "" {
+		sock_dir = "/var/run"
+	}
+	socket := "unix:" + sock_dir + "/podman/podman.sock"
+
+	conn, err := bindings.NewConnection(context.Background(), socket)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	s := specgen.NewSpecGenerator("debian:bookworm-slim", false)
 	s.Terminal = true
 	s.Labels = map[string]string{"test-label": "label-value"}
-	bashCmd := fmt.Sprintf("trap \"exit\" TERM; for try in {1..%d}; do sleep 1; done", 20)
+	bashCmd := fmt.Sprintf("trap \"exit\" TERM; for try in {1..%d}; do sleep 1; done", 3600)
 	s.Command = []string{"/bin/bash", "-c", bashCmd}
 
 	r, err := containers.CreateWithSpec(conn, s, nil)
@@ -79,7 +121,7 @@ func main2() {
 	execCreateConfig := handlers.ExecCreateConfig{
 		ExecConfig: docker.ExecConfig{
 			Tty:          false,
-			Cmd:          []string{"ls", "-ltr", "/etc"},
+			Cmd:          []string{"sleep", "3500"},
 			AttachStdout: true,
 			AttachStderr: true,
 		},
@@ -89,7 +131,7 @@ func main2() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-
+	fmt.Println(execSessionId)
 	mwc := &MyWriteCloser{bufio.NewWriter(os.Stdout)}
 	defer mwc.Close()
 	startAndAttachOptions := new(containers.ExecStartAndAttachOptions)
@@ -137,17 +179,26 @@ func main3() {
 	fmt.Println(string(b))
 }
 
-func main4() {
+func main() {
 	config, err := config.Configure()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	db.Connect(&config.DatabaseConfig)
-
+	db, err := db.NewSQLDatabase(&config.DatabaseConfig)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	testValues, err := db.Tasks().GetAllAnsible()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	fmt.Println(testValues)
 }
 
-func main() {
+func main354() {
 	logging.Initialize(true)
 	config, err := config.Configure()
 	if err != nil {
