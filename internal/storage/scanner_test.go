@@ -72,7 +72,7 @@ func TestArchiveScanner(t *testing.T) {
 
 			scanConfig, err := NewScanConfig(tt.patterns)
 			require.NoError(t, err)
-			scanner := NewArtifactsScanner(&config.ArtifactsConfig{LoadSize: 4096})
+			scanner := NewArtifactsScanner(&config.StorageConfig{LoadSize: 4096})
 			result, err := scanner.ScanArchive(testingFile, scanConfig)
 			if tt.error == nil {
 				require.NoError(t, err)

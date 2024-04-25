@@ -47,7 +47,7 @@ type ArtifactsScannerImpl struct {
 	blockLoadSize uint32
 }
 
-func NewArtifactsScanner(config *config.ArtifactsConfig) *ArtifactsScannerImpl {
+func NewArtifactsScanner(config *config.StorageConfig) *ArtifactsScannerImpl {
 	mimetype.SetLimit(config.LoadSize)
 	return &ArtifactsScannerImpl{
 		blockLoadSize: config.LoadSize,

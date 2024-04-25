@@ -4,6 +4,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/google/uuid"
+	containers2 "github.com/pablintino/automation-executor/internal/containers"
+	"github.com/pablintino/automation-executor/internal/shells"
+	"os"
+	"time"
+
 	"github.com/containers/podman/v3/libpod/define"
 	"github.com/containers/podman/v3/pkg/api/handlers"
 	"github.com/containers/podman/v3/pkg/bindings"
@@ -15,7 +21,6 @@ import (
 	"github.com/pablintino/automation-executor/internal/storage"
 	"github.com/pablintino/automation-executor/logging"
 	"gocloud.dev/blob/fileblob"
-	"os"
 )
 
 type MyWriteCloser struct {
@@ -137,16 +142,6 @@ func main3() {
 	fmt.Println(string(b))
 }
 
-func main4() {
-	config, err := config.Configure()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	db.Connect(&config.DatabaseConfig)
-
-}
-
 func main() {
 	logging.Initialize(true)
 	config, err := config.Configure()
@@ -154,7 +149,55 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	container := storage.NewContainer(&config.ArtifactsConfig)
+	database, err := db.NewSQLDatabase(&config.DatabaseConfig)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	podmanIface, err := containers2.NewPodmanContainerInterface(&config.PodmanConfig, database.Containers(), shells.NewBashShellEnvironmentBuilder(&config.ShellConfig))
+	storageManager, err := storage.NewStorageManager(&config.StorageConfig)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	envUuid, err := uuid.NewUUID()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	ws, err := storageManager.CreateWorkspace(envUuid)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	chann := make(chan interface{})
+	out, err := podmanIface.RunContainer(ws, &containers2.ContainerRunOpts{
+		Image: "docker.io/library/ubuntu:latest",
+		OnReady: func(container containers2.Container) {
+			chann <- true
+		},
+	})
+	fmt.Println(out)
+	fmt.Println(err)
+	select {
+	case msg := <-chann:
+		fmt.Println(msg)
+	}
+	time.Sleep(time.Duration(60) * time.Second)
+}
+
+func main55() {
+	logging.Initialize(true)
+	config, err := config.Configure()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	container, err := storage.NewContainer(&config.StorageConfig)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 	file, err := os.Open("/home/pablintino/Desktop/test.tar.gz")
 	if err != nil {
 		fmt.Println(err)

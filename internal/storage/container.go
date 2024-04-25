@@ -2,21 +2,20 @@ package storage
 
 import (
 	"github.com/pablintino/automation-executor/internal/config"
-	"github.com/spf13/afero"
 )
 
 type Container struct {
-	fs               afero.Fs
-	artifactsFs      afero.Fs
+	StorageManager   Manager
 	ArtifactsScanner ArtifactsScanner
 }
 
-func NewContainer(artifactsConfig *config.ArtifactsConfig) *Container {
-	fs := afero.NewOsFs()
-	artfactsFs := afero.NewBasePathFs(fs, artifactsConfig.StoragePath)
-	return &Container{
-		fs:               fs,
-		artifactsFs:      artfactsFs,
-		ArtifactsScanner: NewArtifactsScanner(artifactsConfig),
+func NewContainer(artifactsConfig *config.StorageConfig) (*Container, error) {
+	manager, err := NewStorageManager(artifactsConfig)
+	if err != nil {
+		return nil, err
 	}
+	return &Container{
+		StorageManager:   manager,
+		ArtifactsScanner: NewArtifactsScanner(artifactsConfig),
+	}, nil
 }
