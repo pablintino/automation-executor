@@ -1,0 +1,3 @@
+FROM docker.io/library/debian:bookworm
+
+ENTRYPOINT ["/usr/bin/bash"]

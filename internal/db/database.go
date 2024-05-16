@@ -2,29 +2,23 @@ package db
 
 import (
 	"database/sql"
+	"log"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/pablintino/automation-executor/internal/models"
-	"log"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/pablintino/automation-executor/internal/config"
 )
 
-type ContainerDb interface {
-	CreateContainerExecTxDeferred(containerId uuid.UUID) (*CreateExecTxDeferred, error)
-	CreateContainerTxDeferred(containerType models.ContainerType) (*CreateContainerTxDeferred, error)
-}
-
-type Database interface {
-	Containers() ContainerDb
 }
 
 type SqlDatabase struct {
 	db            *sqlx.DB
 	config        *config.DatabaseConfig
 	environmentDb *sqlEnvironmentDb
-	containersDb  *sqlContainerDb
 }
 
 func NewSQLDatabase(config *config.DatabaseConfig) (*SqlDatabase, error) {

@@ -9,16 +9,31 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
+const (
+	ExecutorConfigTypeValueContainer         = "container"
+	ContainerExecutorConfigFlavorValuePodman = "podman"
+)
+
 type DatabaseConfig struct {
 	DataSource string `koanf:"datasource"`
 	Driver     string `koanf:"driver"`
 }
 
-type PodmanConfig struct {
-	Socket string `koanf:"socket"`
-}
 type ShellConfig struct {
-	Tracing bool `koanf:"enable-tracing"`
+	Tracing      bool   `koanf:"enable-tracing"`
+	ShellTimeout uint64 `koanf:"timeout"`
+}
+
+type ContainerExecutorConfig struct {
+	Socket            string            `koanf:"socket"`
+	SupportImage      string            `koanf:"support-image"`
+	Flavor            string            `koanf:"flavor"`
+	BuildSupportImage bool              `koanf:"build-support-image"`
+	ExtraMounts       map[string]string `koanf:"extra-mounts"`
+}
+
+type ExecutorConfig struct {
+	Type string `koanf:"type"`
 }
 
 type StorageConfig struct {
@@ -28,10 +43,11 @@ type StorageConfig struct {
 }
 
 type Config struct {
-	DatabaseConfig DatabaseConfig `koanf:"database"`
-	StorageConfig  StorageConfig  `koanf:"storage"`
-	PodmanConfig   PodmanConfig   `koanf:"podman"`
-	ShellConfig    ShellConfig    `koanf:"shell"`
+	DatabaseConfig          DatabaseConfig          `koanf:"database"`
+	StorageConfig           StorageConfig           `koanf:"storage"`
+	ContainerExecutorConfig ContainerExecutorConfig `koanf:"executor-container"`
+	ExecutorConfig          ExecutorConfig          `koanf:"executor"`
+	ShellConfig             ShellConfig             `koanf:"shell"`
 }
 
 func Configure() (*Config, error) {

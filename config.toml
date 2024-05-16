@@ -4,3 +4,10 @@ datasource="user=automation-executor dbname=automation-executor sslmode=disable 
 
 [storage]
 workspaces-location="/home/pablintino/Desktop/test-ws"
+
+[executor]
+type="container"
+
+[executor-container]
+flavor="podman"
+build-support-image=true
