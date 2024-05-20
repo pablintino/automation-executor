@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pablintino/automation-executor/internal/config"
@@ -62,6 +63,7 @@ to quickly create a Cobra application.`,
 			"exitCode", runningCmd.StatusCode(),
 			"finished", runningCmd.Finished(),
 			"error", runningCmd.Error(),
+			"killed", runningCmd.Killed(),
 		)
 
 		err = executor.Destroy()
@@ -98,7 +100,7 @@ count=0
 while [[ ${SECONDS} -le ${max} ]]
 do
 	echo "I am alive $count"
-	sleep 2
+	sleep 1
 	(( count++ ))
 done
 `
@@ -116,8 +118,16 @@ done
 		fmt.Println(err)
 		os.Exit(1)
 	}
+	go timerRoutine(runnningCmd)
 	err = runnningCmd.Wait()
 	return runnningCmd, err
+}
+
+func timerRoutine(cmd common.RunningCommand) {
+	timer1 := time.NewTimer(2 * time.Second)
+
+	<-timer1.C
+	cmd.Kill()
 }
 
 func init() {

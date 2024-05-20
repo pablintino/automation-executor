@@ -521,7 +521,13 @@ func (c *containerAttachedCommand) AttachWait(ctx context.Context, streams *comm
 }
 
 func (c *containerAttachedCommand) Kill() error {
-	return c.executor.clearCmdStoreFromCmd(c, true)
+	if !c.Finished() {
+		// Delete the resources (container). If we are attached
+		// the attach cmd will return, and it will process the
+		// state fetch/set and release the waiting consumers.
+		return c.executor.destroyRunningCmdResources(c)
+	}
+	return nil
 }
 
 func (c *containerAttachedCommand) Container() Container {
@@ -573,7 +579,7 @@ func (c *containerAttachedCommand) attachRoutine(ctx context.Context, streams *c
 		"containerId", c.container.Id(),
 	)
 	if err := c.postRunSetState(err); err != nil {
-		logging.Logger.Debug("post run error",
+		logging.Logger.Debugw("post run error",
 			"error", err,
 			"cmdId", c.Id(),
 			"runId", c.executor.runId,
@@ -597,14 +603,16 @@ func (c *containerAttachedCommand) postRunSetState(runErr error) error {
 			c.setStateError(err)
 		}
 
-		// If the container doesn't exit it's usually because
-		// it has been destroyed underneath
-		if !exists {
+		if exists {
+			c.checkSetStateFromContainerState()
+		} else {
+			// If the container doesn't exit it's usually because
+			// it has been destroyed underneath
 			c.state.code = 1
 			c.state.killed = true
 			c.state.finished = true
 		}
-		c.checkSetStateFromContainerState()
+
 	} else {
 		c.setStateError(runErr)
 	}
