@@ -16,11 +16,14 @@ import (
 )
 
 const (
-	containerResourcesLabel      = "app"
-	containerResourcesLabelValue = "automation-excutor"
-	containerResourcesRunIdLabel = "automation-executor-run-id"
-	volumeNamePrefix             = "automation-executor-volume"
-	containerPayloadNamePrefix   = "automation-executor-payload"
+	containerResourcesLabel                          = "app"
+	containerResourcesLabelValue                     = "automation-excutor"
+	containerResourcesLabelRunId                     = "automation-executor-run-id"
+	containerResourcesLabelContainerType             = "automation-executor-container-type"
+	containerResourcesLabelContainerTypeValuePayload = "payload"
+	containerResourcesLabelContainerTypeValueSupport = "support"
+	volumeNamePrefix                                 = "automation-executor-volume"
+	containerPayloadNamePrefix                       = "automation-executor-payload"
 )
 
 type containerRunningCommand interface {
@@ -29,8 +32,27 @@ type containerRunningCommand interface {
 }
 
 type cmdSyncStore struct {
-	cmd containerRunningCommand
-	mtx sync.Mutex
+	currentCmd  containerRunningCommand
+	previousCmd containerRunningCommand
+	mtx         sync.Mutex
+}
+
+func (c *cmdSyncStore) clear(cmd containerRunningCommand) {
+	if cmd == nil {
+		c.currentCmd = nil
+		c.previousCmd = nil
+	} else if cmd == c.currentCmd {
+		c.currentCmd = nil
+	} else if cmd == c.previousCmd {
+		c.previousCmd = nil
+	}
+}
+
+func (c *cmdSyncStore) push(cmd containerRunningCommand) {
+	if c.currentCmd != nil {
+		c.previousCmd = c.currentCmd
+	}
+	c.currentCmd = cmd
 }
 
 type ContainerExecutorImpl struct {
@@ -42,6 +64,7 @@ type ContainerExecutorImpl struct {
 	imageResolver supportImageResolver
 	volumeName    string
 	opts          *common.ExecutorOpts
+	recovered     bool
 }
 
 func NewContainerExecutor(config *config.ContainerExecutorConfig, runtime ContainerRuntime, imageResolver supportImageResolver, runId uuid.UUID, opts *common.ExecutorOpts) (*ContainerExecutorImpl, error) {
@@ -51,7 +74,12 @@ func NewContainerExecutor(config *config.ContainerExecutorConfig, runtime Contai
 	if opts.WorkspaceDirectory == "" {
 		return nil, fmt.Errorf("workspace directory cannot be empty")
 	}
-	return &ContainerExecutorImpl{config: config, runId: runId, runtime: runtime, imageResolver: imageResolver, opts: opts}, nil
+	instance := &ContainerExecutorImpl{config: config, runId: runId, runtime: runtime, imageResolver: imageResolver, opts: opts}
+	return instance, instance.init()
+}
+
+func (e *ContainerExecutorImpl) Recovered() bool {
+	return e.recovered
 }
 
 func (e *ContainerExecutorImpl) Prepare() error {
@@ -64,17 +92,22 @@ func (e *ContainerExecutorImpl) Prepare() error {
 
 func (e *ContainerExecutorImpl) Destroy() error {
 	var err error
-	if err = e.destroySharedVolume(); err != nil {
-		logging.Logger.Errorw("failed to destroy executor shared volume", "err", err)
-	}
 	if errC := e.destroyContainers(); errC != nil {
 		logging.Logger.Errorw("failed to destroy executor containers", "err", errC)
 		err = errors.Join(err, errC)
+	}
+	if errV := e.destroySharedVolume(); errV != nil {
+		logging.Logger.Errorw("failed to destroy executor shared volume", "err", err)
+		err = errors.Join(err, errV)
 	}
 	return err
 }
 
 func (e *ContainerExecutorImpl) prepareSharedVolume() error {
+	if e.volumeName != "" {
+		// Already created
+		return nil
+	}
 	volumeName := volumeNamePrefix + "-" + strings.ToLower(utils.RandomString(10))
 	logging.Logger.Infow("creating executor volume", "volumeName", volumeName, "runId", e.runId.String())
 	name, err := e.runtime.CreateVolume(volumeName, e.buildResourceLabels(nil))
@@ -87,7 +120,10 @@ func (e *ContainerExecutorImpl) prepareSharedVolume() error {
 
 func (e *ContainerExecutorImpl) destroySharedVolume() error {
 	if e.volumeName != "" {
-		return e.runtime.DeleteVolume(e.volumeName)
+		if err := e.runtime.DeleteVolume(e.volumeName, false); err != nil {
+			return err
+		}
+		e.volumeName = ""
 	}
 	return nil
 }
@@ -104,20 +140,29 @@ func (e *ContainerExecutorImpl) destroyContainers() error {
 	return errors.Join(payloadDestroyErr, supportDestroyErr)
 }
 
+func (e *ContainerExecutorImpl) GetRunningCommand(support bool) common.RunningCommand {
+	store := e.getStore(support)
+	store.mtx.Lock()
+	defer store.mtx.Unlock()
+	return store.currentCmd
+}
+
+func (e *ContainerExecutorImpl) GetPreviousRunningCommand(support bool) common.RunningCommand {
+	store := e.getStore(support)
+	store.mtx.Lock()
+	defer store.mtx.Unlock()
+	return store.previousCmd
+}
+
 func (e *ContainerExecutorImpl) Execute(ctx context.Context, command *common.ExecutorCommand, streams *common.ExecutorStreams) (common.RunningCommand, error) {
-	var store *cmdSyncStore
-	if command.IsSupport {
-		store = &e.supportCmd
-	} else {
-		store = &e.payloadCmd
-	}
+	store := e.getStore(command.IsSupport)
 	store.mtx.Lock()
 	defer store.mtx.Unlock()
 
-	if command.IsSupport && store.cmd != nil {
+	if command.IsSupport && store.currentCmd != nil {
 		return nil, fmt.Errorf("cannot execute a new support command as another one is still running")
 	}
-	if store.cmd != nil {
+	if store.currentCmd != nil {
 		return nil, fmt.Errorf("cannot execute new command as another one is still running")
 	}
 
@@ -128,9 +173,9 @@ func (e *ContainerExecutorImpl) Execute(ctx context.Context, command *common.Exe
 	}
 
 	cmd := newContainerAttachedCommand(cmdUuid, command, container, e)
-	cmd.start(ctx, streams)
-	store.cmd = cmd
-	return store.cmd, nil
+	store.push(cmd)
+	go cmd.attachRoutine(ctx, streams, true)
+	return cmd, nil
 }
 
 func (e *ContainerExecutorImpl) requestContainer(cmdUuid uuid.UUID, command *common.ExecutorCommand) (Container, error) {
@@ -152,13 +197,14 @@ func (e *ContainerExecutorImpl) requestContainer(cmdUuid uuid.UUID, command *com
 	if command.Script != "" {
 		requiresInputStream = true
 	}
+
 	runOpts := &ContainerRunOpts{
-		Command:     command.Command,
-		Image:       image,
-		Labels:      e.buildResourceLabels(nil),
-		Volumes:     e.buildMounts(),
-		Mounts:      e.config.ExtraMounts,
-		AttachStdin: requiresInputStream,
+		Command:       command.Command,
+		Image:         image,
+		Labels:        e.buildContainerLabels(nil, command.IsSupport),
+		Volumes:       e.buildMounts(),
+		Mounts:        e.config.ExtraMounts,
+		PreserveStdin: requiresInputStream,
 	}
 	name := containerPayloadNamePrefix + "-" + strings.ReplaceAll(cmdUuid.String(), "-", "")[:10]
 	container, err := e.runtime.CreateContainer(name, runOpts)
@@ -168,43 +214,44 @@ func (e *ContainerExecutorImpl) requestContainer(cmdUuid uuid.UUID, command *com
 func (e *ContainerExecutorImpl) clearCmdStore(store *cmdSyncStore) error {
 	store.mtx.Lock()
 	defer store.mtx.Unlock()
-	if store.cmd == nil {
-		return nil
+
+	var err error
+	if store.currentCmd != nil {
+		err = e.destroyRunningCmdResources(store.currentCmd)
 	}
-	if err := e.destroyStoreResources(store); err != nil {
-		return err
+	if store.previousCmd != nil {
+		err = errors.Join(e.destroyRunningCmdResources(store.previousCmd), err)
 	}
-	// Clear the pointer to signal the store cmd is gone
-	store.cmd = nil
-	return nil
+	store.clear(nil)
+	return err
 }
 
-func (e *ContainerExecutorImpl) clearCmdStoreFromCmd(cmd *containerAttachedCommand) error {
-	var store *cmdSyncStore
-	if cmd.command.IsSupport {
-		store = &e.supportCmd
-	} else {
-		store = &e.payloadCmd
-	}
+func (e *ContainerExecutorImpl) clearCmdStoreFromCmd(cmd *containerAttachedCommand, ignoreAlreadyCleared bool) error {
+	store := e.getStore(cmd.cmd.IsSupport)
 	store.mtx.Lock()
 	defer store.mtx.Unlock()
-	if store.cmd != cmd {
+	if !ignoreAlreadyCleared && store.currentCmd == nil {
+		return errors.New("invalid attempt to clear the internal cmd store twice")
+	} else if store.currentCmd == nil {
+		// Do not attempt to clear it if already cleared and ignoreAlreadyCleared is true
+		return nil
+	}
+	if store.currentCmd != cmd {
 		runningId := ""
-		if store.cmd != nil {
-			runningId = store.cmd.Id().String()
+		if store.currentCmd != nil {
+			runningId = store.currentCmd.Id().String()
 		}
 		return fmt.Errorf("cannot clear cmd store from a different running command. Running: %s, requested: %s ", runningId, cmd.Id())
 	}
-	if err := e.destroyStoreResources(store); err != nil {
+	if err := e.destroyRunningCmdResources(cmd); err != nil {
 		return err
 	}
-	// Clear the pointer to signal the store cmd is gone
-	store.cmd = nil
+	store.clear(cmd)
 	return nil
 }
 
-func (e *ContainerExecutorImpl) destroyStoreResources(store *cmdSyncStore) error {
-	containerId := store.cmd.Container().Id()
+func (e *ContainerExecutorImpl) destroyRunningCmdResources(cmd containerRunningCommand) error {
+	containerId := cmd.Container().Id()
 	containerExists, err := e.runtime.ExistsContainer(containerId)
 	if err != nil {
 		return err
@@ -220,9 +267,19 @@ func (e *ContainerExecutorImpl) buildResourceLabels(labels map[string]string) ma
 	for key, value := range labels {
 		targetLabels[key] = value
 	}
-	targetLabels[containerResourcesRunIdLabel] = e.runId.String()
+	targetLabels[containerResourcesLabelRunId] = e.runId.String()
 	targetLabels[containerResourcesLabel] = containerResourcesLabelValue
 	return targetLabels
+}
+
+func (e *ContainerExecutorImpl) buildContainerLabels(labels map[string]string, isSupport bool) map[string]string {
+	result := e.buildResourceLabels(labels)
+	labelTypeValue := containerResourcesLabelContainerTypeValuePayload
+	if isSupport {
+		labelTypeValue = containerResourcesLabelContainerTypeValueSupport
+	}
+	result[containerResourcesLabelContainerType] = labelTypeValue
+	return result
 }
 
 func (e *ContainerExecutorImpl) buildMounts() map[string]string {
@@ -234,12 +291,134 @@ func (e *ContainerExecutorImpl) buildMounts() map[string]string {
 	return targetMounts
 }
 
+func (e *ContainerExecutorImpl) init() error {
+	// Check if there are resources already created
+	volumeName, initVolErr := e.initVolume()
+	if initVolErr != nil {
+		logging.Logger.Errorw("failure recovering executor volume",
+			"err", initVolErr, "runId", e.runId.String())
+	}
+	initSupportErr := e.initStore(true, volumeName)
+	if initSupportErr != nil {
+		logging.Logger.Errorw("failure recovering support container",
+			"err", initSupportErr, "runId", e.runId.String())
+	}
+	initPayloadErr := e.initStore(false, volumeName)
+	if initPayloadErr != nil {
+		logging.Logger.Errorw("failure recovering payload container",
+			"err", initPayloadErr, "runId", e.runId.String())
+	}
+	resultErr := errors.Join(initVolErr, initSupportErr, initPayloadErr)
+	if resultErr != nil {
+		if destroyCtrsErr := e.destroyContainers(); destroyCtrsErr != nil {
+			logging.Logger.Errorw("failure destroying unrecoverable containers",
+				"err", initPayloadErr, "runId", e.runId.String())
+		}
+		if volumeName != "" {
+			if destroyVolErr := e.runtime.DeleteVolume(volumeName, true); destroyVolErr != nil {
+				logging.Logger.Errorw("failure destroying unrecoverable containers",
+					"err", initPayloadErr, "runId", e.runId.String())
+			}
+		}
+		return resultErr
+	}
+
+	if volumeName != "" {
+		// If the volume exists the executor was created by another call before
+		e.recovered = true
+	}
+	return nil
+}
+
+func (e *ContainerExecutorImpl) initVolume() (string, error) {
+	volumes, err := e.runtime.GetVolumesByLabels(e.buildResourceLabels(nil))
+	if err != nil {
+		return "", nil
+	}
+	targetVol := ""
+	var resultError error
+	for _, volName := range volumes {
+		if targetVol == "" {
+			targetVol = volName
+		} else {
+			resultError = fmt.Errorf("multiple volumes exists for the same runId %s volume: %s", e.runId.String(), targetVol)
+		}
+	}
+	if resultError == nil {
+		return targetVol, nil
+	}
+
+	for _, volName := range volumes {
+		if err := e.runtime.DeleteVolume(volName, true); err != nil {
+			resultError = errors.Join(resultError, err)
+		}
+	}
+
+	return "", resultError
+}
+
+func (e *ContainerExecutorImpl) initStore(support bool, volume string) error {
+	containerList, err := e.runtime.GetContainersByLabels(e.buildContainerLabels(nil, support))
+	if err != nil {
+		return err
+	}
+	var resultError error
+	var containerCommand *containerAttachedCommand
+	for _, item := range containerList {
+		if containerCommand == nil {
+			_, volumeMounted := item.GetRunOpts().Volumes[volume]
+			var buildErr error
+			if volumeMounted {
+				containerCommand, buildErr = newContainerAttachedCommandFromContainer(item, e)
+			} else {
+				buildErr = fmt.Errorf("command container mathing cmdId has non consisted volumes %s", item.Id())
+			}
+
+			if buildErr != nil {
+				resultError = errors.Join(resultError, buildErr)
+			} else if containerCommand != nil {
+				continue
+			}
+		}
+		if err := e.runtime.DestroyContainer(item.Id()); err != nil {
+			resultError = errors.Join(resultError, err)
+		}
+	}
+	if resultError != nil && containerCommand != nil {
+		if err := e.runtime.DestroyContainer(containerCommand.Container().Id()); err != nil {
+			resultError = errors.Join(resultError, err)
+		}
+	}
+	if resultError != nil || containerCommand == nil {
+		return resultError
+	}
+
+	store := e.getStore(support)
+	store.mtx.Lock()
+	defer store.mtx.Unlock()
+	if containerCommand.state.finished {
+		store.previousCmd = containerCommand
+	} else {
+		store.currentCmd = containerCommand
+	}
+	return nil
+}
+
+func (e *ContainerExecutorImpl) getStore(isSupport bool) *cmdSyncStore {
+	if isSupport {
+		return &e.supportCmd
+	} else {
+		return &e.payloadCmd
+	}
+}
+
 type containerAttachedCommand struct {
 	id        uuid.UUID
 	container Container
-	command   *common.ExecutorCommand
-	waiter    chan error
-	exectutor *ContainerExecutorImpl
+	cmd       *common.ExecutorCommand
+	cmdDone   chan error
+	cmdOnce   sync.Once
+	executor  *ContainerExecutorImpl
 	state     struct {
 		code     int
 		finished bool
@@ -249,14 +428,44 @@ type containerAttachedCommand struct {
 	}
 }
 
-func newContainerAttachedCommand(cmdUuid uuid.UUID, command *common.ExecutorCommand, container Container, exectutor *ContainerExecutorImpl) *containerAttachedCommand {
-	return &containerAttachedCommand{
+func newContainerAttachedCommand(cmdUuid uuid.UUID, cmd *common.ExecutorCommand, container Container, executor *ContainerExecutorImpl) *containerAttachedCommand {
+	instance := &containerAttachedCommand{
 		container: container,
 		id:        cmdUuid,
-		command:   command,
-		exectutor: exectutor,
-		waiter:    make(chan error),
+		cmd:       cmd,
+		executor:  executor,
+		cmdDone:   make(chan error),
 	}
+	return instance
+}
+
+func newContainerAttachedCommandFromContainer(container Container, executor *ContainerExecutorImpl) (*containerAttachedCommand, error) {
+	opts := container.GetRunOpts()
+	cmdUuid := extractContainerRunId(opts.Labels)
+	if cmdUuid == uuid.Nil {
+		return nil, fmt.Errorf("cannot parse cmd ID from %s container labels", container.Id())
+
+	}
+	isSupport, err := extractContainerTypeSupportFromLabels(opts.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse container type from %s container labels", container.Id())
+	}
+	cmd := &common.ExecutorCommand{
+		Command:   opts.Command,
+		Script:    "",
+		ImageName: opts.Image,
+		Environ:   opts.Environ,
+		IsSupport: isSupport,
+	}
+	instance := newContainerAttachedCommand(cmdUuid, cmd, container, executor)
+	if err := instance.checkSetStateFromContainerState(); err != nil {
+		return nil, err
+	}
+	if instance.state.finished {
+		close(instance.cmdDone)
+		instance.cmdOnce.Do(func() {})
+	}
+	return instance, nil
 }
 
 func (c *containerAttachedCommand) Id() uuid.UUID {
@@ -287,76 +496,169 @@ func (c *containerAttachedCommand) Error() error {
 }
 
 func (c *containerAttachedCommand) Wait() error {
-	return <-c.waiter
+	finished, err := c.waitFinishedBarrier()
+	if err != nil || finished {
+		return err
+	}
+	//Wait till done (closed)
+	<-c.cmdDone
+	return c.state.err
 }
 
-func (c *containerAttachedCommand) Destroy() error {
-	return c.exectutor.clearCmdStoreFromCmd(c)
+func (c *containerAttachedCommand) AttachWait(ctx context.Context, streams *common.ExecutorStreams) error {
+	finished, err := c.waitFinishedBarrier()
+	if err != nil || finished {
+		return err
+	}
+
+	c.cmdOnce.Do(func() {
+		go c.attachRoutine(ctx, streams, false)
+	})
+
+	//Wait till done (closed)
+	<-c.cmdDone
+	return c.state.err
+}
+
+func (c *containerAttachedCommand) Kill() error {
+	return c.executor.clearCmdStoreFromCmd(c, true)
 }
 
 func (c *containerAttachedCommand) Container() Container {
 	return c.container
 }
 
-func (c *containerAttachedCommand) start(ctx context.Context, streams *common.ExecutorStreams) {
+func (c *containerAttachedCommand) waitFinishedBarrier() (bool, error) {
+	c.state.mtx.Lock()
+	defer c.state.mtx.Unlock()
+	return c.state.finished, c.state.err
+}
+
+func (c *containerAttachedCommand) attachRoutine(ctx context.Context, streams *common.ExecutorStreams, isNew bool) {
+
 	var reader io.Reader
-	if c.command.Script != "" {
-		reader = strings.NewReader(c.command.Script)
+	// Only attach in the first run, when the start is performed
+	if c.cmd.Script != "" {
+		reader = strings.NewReader(c.cmd.Script)
 	}
 	runStreams := &ContainerStreams{
 		Output: streams.OutputStream,
 		Error:  streams.ErrorStream,
 		Input:  reader,
 	}
-	go func() {
-		if err := c.container.StartAttach(ctx, runStreams); err != nil {
-			c.state.mtx.Lock()
-			c.setStateError(err)
-			c.state.mtx.Unlock()
-		} else {
-			c.checkSetExitState()
-		}
-		c.exectutor.clearCmdStoreFromCmd(c)
-		c.waiter <- c.state.err
-	}()
+	requiresStart := isNew
+	canAttach := isNew
+	// Avoid running the preflight if the container was created in the same run
+	if !isNew {
+		requiresStart, canAttach = c.preFlightCheck()
+	}
+
+	logging.Logger.Debugw("container about to be started/attached",
+		"cmdId", c.Id(),
+		"runId", c.executor.runId,
+		"containerId", c.container.Id(),
+		"startRequired", requiresStart,
+		"scriptLength", len(c.cmd.Script),
+	)
+
+	var err error
+	if requiresStart {
+		err = c.container.StartAttach(ctx, runStreams)
+	} else if canAttach {
+		err = c.container.Attach(ctx, runStreams)
+	}
+	logging.Logger.Debugw("container attach finished",
+		"cmdId", c.Id(),
+		"runId", c.executor.runId,
+		"containerId", c.container.Id(),
+	)
+	if err := c.postRunSetState(err); err != nil {
+		logging.Logger.Debug("post run error",
+			"error", err,
+			"cmdId", c.Id(),
+			"runId", c.executor.runId,
+			"containerId", c.container.Id(),
+		)
+	}
+
+	// Signal all the waiting routing we are done
+	close(c.cmdDone)
 }
 
-func (c *containerAttachedCommand) checkSetExitState() bool {
+func (c *containerAttachedCommand) postRunSetState(runErr error) error {
 	c.state.mtx.Lock()
 	defer c.state.mtx.Unlock()
-	if c.state.finished {
-		return true
-	}
-	exists, err := c.exectutor.runtime.ExistsContainer(c.container.Id())
-	if err != nil {
-		// In case we are not able to get if it exists
-		// consider it as failed for simplicity
-		c.setStateError(err)
-		return true
+
+	if runErr == nil {
+		exists, err := c.executor.runtime.ExistsContainer(c.container.Id())
+		if err != nil {
+			// In case we are not able to get if it exists
+			// consider it as failed for simplicity
+			c.setStateError(err)
+		}
+
+		// If the container doesn't exit it's usually because
+		// it has been destroyed underneath
+		if !exists {
+			c.state.code = 1
+			c.state.killed = true
+			c.state.finished = true
+		}
+		c.checkSetStateFromContainerState()
+	} else {
+		c.setStateError(runErr)
 	}
 
-	// If the container doesn't exit it's usually because
-	// it has been destroyed underneath
-	if !exists {
-		c.state.code = 1
-		c.state.killed = true
-		c.state.finished = true
-		return c.state.finished
-	}
+	logging.Logger.Debugw("container post run reached",
+		"cmdId", c.Id(),
+		"runId", c.executor.runId,
+		"containerId", c.container.Id(),
+		"exitCode", c.state.code,
+		"error", c.state.err,
+		"killed", c.state.killed,
+	)
 
-	state, err := c.exectutor.runtime.GetState(c.container.Id())
+	clearErr := c.executor.clearCmdStoreFromCmd(c, false)
+	return errors.Join(c.state.err, clearErr)
+}
+
+func (c *containerAttachedCommand) checkSetStateFromContainerState() error {
+	state, err := c.executor.runtime.GetState(c.container.Id())
 	if err != nil {
 		// In case we are not able to get the state
 		// consider it as failed for simplicity
 		c.setStateError(err)
-		return true
+		return err
 	}
 	currentState := strings.ToLower(state.Status)
 	if currentState == containerStateStopped || currentState == containerStateExited {
 		c.state.code = int(state.ExitCode)
 		c.state.finished = true
 	}
-	return c.state.finished
+	return err
+}
+
+func (c *containerAttachedCommand) preFlightCheck() (bool, bool) {
+	// Lock not required as it's a read only operation
+	// from the same routine that sets the state
+	if c.state.finished {
+		return false, false
+	}
+	exists, err := c.executor.runtime.ExistsContainer(c.container.Id())
+	if err != nil || !exists {
+		return false, false
+	}
+
+	state, err := c.executor.runtime.GetState(c.container.Id())
+	if err != nil {
+		return false, false
+	}
+	currentState := strings.ToLower(state.Status)
+	if currentState == containerStateExited {
+		return false, false
+	}
+	return currentState == containerStateCreated || currentState == containerStateConfigured,
+		currentState == containerStateRunning
 }
 
 func (c *containerAttachedCommand) setStateError(err error) {
@@ -364,4 +666,23 @@ func (c *containerAttachedCommand) setStateError(err error) {
 	c.state.finished = true
 	c.state.code = 1
 	c.state.err = err
+}
+
+func extractContainerRunId(labels map[string]string) uuid.UUID {
+	strRunId, ok := labels[containerResourcesLabelRunId]
+	if !ok {
+		return uuid.Nil
+	}
+	id, err := uuid.Parse(strRunId)
+	if err != nil {
+		return uuid.Nil
+	}
+	return id
+}
+func extractContainerTypeSupportFromLabels(labels map[string]string) (bool, error) {
+	containerType, ok := labels[containerResourcesLabelContainerType]
+	if !ok {
+		return false, errors.New("container type label not present")
+	}
+	return containerType == containerResourcesLabelContainerTypeValueSupport, nil
 }

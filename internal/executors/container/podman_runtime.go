@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/containers/buildah/define"
 	"github.com/containers/podman/v3/pkg/bindings"
@@ -54,7 +55,7 @@ func (r *podmanRuntime) CreateVolume(name string, labels map[string]string) (str
 	return result.Name, err
 }
 
-func (r *podmanRuntime) DeleteVolume(name string) error {
+func (r *podmanRuntime) DeleteVolume(name string, force bool) error {
 	exists, err := volumes.Exists(r.clientCtx, name, nil)
 	if err != nil {
 
@@ -82,9 +83,10 @@ func (r *podmanRuntime) CreateContainer(name string, runOpts *ContainerRunOpts) 
 	s.Terminal = false
 	s.Labels = runOpts.Labels
 	s.Volumes = buildPodmanVolumes(runOpts.Volumes)
+	s.Env = runOpts.Environ
 	s.Command = runOpts.Command
 	s.Name = name
-	s.Stdin = runOpts.AttachStdin
+	s.Stdin = runOpts.PreserveStdin
 
 	createResponse, err := containers.CreateWithSpec(r.clientCtx, s, nil)
 	if err != nil {
@@ -127,6 +129,22 @@ func (r *podmanRuntime) StartAttach(ctx context.Context, id string, streams *Con
 	}
 }
 
+func (r *podmanRuntime) Attach(ctx context.Context, id string, streams *ContainerStreams) error {
+	attachErr := make(chan error)
+	go func() {
+		stream := true
+		opts := &containers.AttachOptions{Stream: &stream}
+		err := containers.Attach(r.clientCtx, id, streams.Input, streams.Output, streams.Error, nil, opts)
+		attachErr <- err
+	}()
+	select {
+	case err := <-attachErr:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("container attach aborted %s", id)
+	}
+}
+
 func (r *podmanRuntime) ExistsContainer(name string) (bool, error) {
 	exists, err := containers.Exists(r.clientCtx, name, nil)
 	if err != nil {
@@ -156,10 +174,84 @@ func (r *podmanRuntime) ExistsImage(name string) (bool, error) {
 	return exists, nil
 }
 
+func (r *podmanRuntime) GetVolumesByLabels(labels map[string]string) ([]string, error) {
+	opts := &volumes.ListOptions{Filters: map[string][]string{"label": buildLabelFilters(labels)}}
+	volumes, err := volumes.List(r.clientCtx, opts)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, len(volumes))
+	for idx, item := range volumes {
+		result[idx] = item.Name
+	}
+	return result, err
+}
+
+func (r *podmanRuntime) GetContainersByLabels(labels map[string]string) ([]Container, error) {
+	finished := true
+	opts := &containers.ListOptions{All: &finished, Filters: map[string][]string{"label": buildLabelFilters(labels)}}
+	listResult, err := containers.List(r.clientCtx, opts)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Container, len(listResult))
+	for idx, item := range listResult {
+		instance, err := r.buildContainerFromId(item.ID)
+		if err != nil {
+			return nil, err
+		}
+		result[idx] = instance
+	}
+	return result, err
+}
+
+func (r *podmanRuntime) buildContainerFromId(id string) (Container, error) {
+	inspect, err := containers.Inspect(r.clientCtx, id, nil)
+	if err != nil {
+		return nil, err
+	}
+	instance := &containerImp{runtime: r, runtimeId: id}
+	instance.runOpts.Command = inspect.Config.Cmd
+	instance.runOpts.Labels = inspect.Config.Labels
+	instance.runOpts.Image = inspect.Config.Image
+	instance.runOpts.PreserveStdin = inspect.Config.OpenStdin
+	instance.runOpts.Volumes = make(map[string]string)
+	instance.runOpts.Mounts = make(map[string]string)
+	instance.runOpts.Environ = make(map[string]string)
+	for _, env := range inspect.Config.Env {
+		envSplit := strings.Split(env, "=")
+		value := ""
+		if len(envSplit) == 2 {
+			value = envSplit[1]
+		}
+		instance.runOpts.Environ[envSplit[0]] = value
+	}
+	for _, mountData := range inspect.Mounts {
+		if mountData.Type == "volume" {
+			instance.runOpts.Volumes[mountData.Name] = mountData.Destination
+		} else if mountData.Type == "bind" {
+			instance.runOpts.Mounts[mountData.Source] = mountData.Destination
+		}
+	}
+	return instance, err
+}
+
 func buildPodmanVolumes(requestedMounts map[string]string) []*specgen.NamedVolume {
 	mounts := make([]*specgen.NamedVolume, 0)
 	for source, target := range requestedMounts {
 		mounts = append(mounts, &specgen.NamedVolume{Dest: target, Name: source})
 	}
 	return mounts
+}
+
+func buildLabelFilters(labels map[string]string) []string {
+	labelFilters := make([]string, 0)
+	for label, value := range labels {
+		if value == "" {
+			labelFilters = append(labelFilters, label)
+		} else {
+			labelFilters = append(labelFilters, fmt.Sprintf("%s=%s", label, value))
+		}
+	}
+	return labelFilters
 }

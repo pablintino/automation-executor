@@ -6,17 +6,21 @@ import (
 )
 
 const (
-	containerStateExited  = "exited"
-	containerStateStopped = "stopped"
+	containerStateExited     = "exited"
+	containerStateStopped    = "stopped"
+	containerStateCreated    = "created"
+	containerStateConfigured = "configured"
+	containerStateRunning    = "running"
 )
 
 type ContainerRunOpts struct {
-	Labels      map[string]string
-	Image       string
-	Command     []string
-	Volumes     map[string]string
-	Mounts      map[string]string
-	AttachStdin bool
+	Labels        map[string]string
+	Image         string
+	Command       []string
+	Volumes       map[string]string
+	Mounts        map[string]string
+	Environ       map[string]string
+	PreserveStdin bool
 }
 
 type containerImp struct {
@@ -42,22 +46,30 @@ type Container interface {
 	GetRunOpts() ContainerRunOpts
 	Id() string
 	StartAttach(ctx context.Context, streams *ContainerStreams) error
+	Attach(ctx context.Context, streams *ContainerStreams) error
 }
 
 type ContainerRuntime interface {
 	CreateVolume(name string, labels map[string]string) (string, error)
-	DeleteVolume(name string) error
+	DeleteVolume(name string, force bool) error
 	Build(name string, containerFile string) error
 	ExistsImage(name string) (bool, error)
 	ExistsContainer(name string) (bool, error)
+	GetVolumesByLabels(labels map[string]string) ([]string, error)
+	GetContainersByLabels(labels map[string]string) ([]Container, error)
 	CreateContainer(name string, runOpts *ContainerRunOpts) (Container, error)
 	DestroyContainer(name string) error
 	StartAttach(ctx context.Context, id string, streams *ContainerStreams) error
+	Attach(ctx context.Context, id string, streams *ContainerStreams) error
 	GetState(id string) (*ContainerState, error)
 }
 
 func (c *containerImp) StartAttach(ctx context.Context, streams *ContainerStreams) error {
 	return c.runtime.StartAttach(ctx, c.runtimeId, streams)
+}
+
+func (c *containerImp) Attach(ctx context.Context, streams *ContainerStreams) error {
+	return c.runtime.Attach(ctx, c.runtimeId, streams)
 }
 
 func (c *containerImp) GetRunOpts() ContainerRunOpts {

@@ -41,46 +41,28 @@ to quickly create a Cobra application.`,
 		opts := &common.ExecutorOpts{
 			WorkspaceDirectory: "/tmp",
 		}
-		executor, err := executorFactory.GetExecutor(uuid.New(), opts)
+		executor, err := executorFactory.GetExecutor(uuid.MustParse("ccb51a13-2b4c-414b-abb0-430dcb40432b"), opts)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
 
+		var runningCmd common.RunningCommand
+		if executor.Recovered() {
+			runningCmd, err = recoveredExecutorRun(executor)
+		} else {
+			runningCmd, err = newExecutorRun(executor)
+		}
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		err = executor.Prepare()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		script := `
-max=$((SECONDS + 2))
-
-while [[ ${SECONDS} -le ${max} ]]
-do
-	echo "I am alive"
-	sleep 2
-done
-`
-		execCommand := &common.ExecutorCommand{
-			ImageName: "docker.io/library/debian:bookworm",
-			IsSupport: false,
-			Script:    script,
-			Command:   []string{"/bin/bash"},
-		}
-		streams := &common.ExecutorStreams{
-			OutputStream: os.Stdout,
-		}
-		runnningCmd, err := executor.Execute(context.Background(), execCommand, streams)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		err = runnningCmd.Wait()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		logging.Logger.Infow("result", "exitCode", runnningCmd.StatusCode(), "finished", runnningCmd.Finished(), "error", runnningCmd.Error())
+		logging.Logger.Infow(
+			"result",
+			"exitCode", runningCmd.StatusCode(),
+			"finished", runningCmd.Finished(),
+			"error", runningCmd.Error(),
+		)
 
 		err = executor.Destroy()
 		if err != nil {
@@ -88,6 +70,54 @@ done
 			os.Exit(1)
 		}
 	},
+}
+
+func recoveredExecutorRun(executor common.Executor) (common.RunningCommand, error) {
+	cmd := executor.GetRunningCommand(false)
+	if cmd != nil {
+		streams := &common.ExecutorStreams{
+			OutputStream: os.Stdout,
+		}
+		return cmd, cmd.AttachWait(context.Background(), streams)
+
+	} else {
+		cmd = executor.GetPreviousRunningCommand(false)
+		return cmd, nil
+	}
+}
+
+func newExecutorRun(executor common.Executor) (common.RunningCommand, error) {
+	err := executor.Prepare()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	script := `
+max=$((SECONDS + 30))
+count=0
+while [[ ${SECONDS} -le ${max} ]]
+do
+	echo "I am alive $count"
+	sleep 2
+	(( count++ ))
+done
+`
+	execCommand := &common.ExecutorCommand{
+		ImageName: "docker.io/library/debian:bookworm",
+		IsSupport: false,
+		Script:    script,
+		Command:   []string{"/bin/bash"},
+	}
+	streams := &common.ExecutorStreams{
+		OutputStream: os.Stdout,
+	}
+	runnningCmd, err := executor.Execute(context.Background(), execCommand, streams)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	err = runnningCmd.Wait()
+	return runnningCmd, err
 }
 
 func init() {

@@ -32,12 +32,16 @@ type RunningCommand interface {
 	StatusCode() int
 	Error() error
 	Wait() error
-	Destroy() error
+	AttachWait(ctx context.Context, streams *ExecutorStreams) error
+	Kill() error
 }
 
 type Executor interface {
 	Prepare() error
 	Destroy() error
+	Recovered() bool
+	GetRunningCommand(support bool) RunningCommand
+	GetPreviousRunningCommand(support bool) RunningCommand
 	Execute(ctx context.Context, command *ExecutorCommand, streams *ExecutorStreams) (RunningCommand, error)
 }
 
