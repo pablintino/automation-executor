@@ -2,18 +2,11 @@ package db
 
 import (
 	"database/sql"
-	"log"
-	"time"
-
-	"github.com/google/uuid"
-	"github.com/pablintino/automation-executor/internal/models"
-
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/pablintino/automation-executor/internal/config"
+	"log"
 )
-
-}
 
 type SqlDatabase struct {
 	db            *sqlx.DB
@@ -31,13 +24,8 @@ func NewSQLDatabase(config *config.DatabaseConfig) (*SqlDatabase, error) {
 	return &SqlDatabase{
 		db:            dbX,
 		environmentDb: newSqlEnvironmentDb(dbX),
-		containersDb:  newSqlContainerDb(dbX),
 		config:        config,
 	}, nil
-}
-
-func (s *SqlDatabase) Containers() ContainerDb {
-	return s.containersDb
 }
 
 func connect(config *config.DatabaseConfig) (*sql.DB, error) {

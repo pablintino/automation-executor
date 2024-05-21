@@ -2,6 +2,7 @@ package executors
 
 import (
 	"errors"
+	"go.uber.org/zap"
 
 	"github.com/google/uuid"
 	"github.com/pablintino/automation-executor/internal/config"
@@ -15,10 +16,13 @@ type ExecutorFactoryImpl struct {
 	factory         common.ExecutorFactory
 }
 
-func NewExecutorFactory(executorConfig *config.ExecutorConfig, containerConfig *config.ContainerExecutorConfig) (*ExecutorFactoryImpl, error) {
+func NewExecutorFactory(
+	executorConfig *config.ExecutorConfig,
+	containerConfig *config.ContainerExecutorConfig,
+	logger *zap.SugaredLogger) (*ExecutorFactoryImpl, error) {
 	instance := &ExecutorFactoryImpl{executorConfig: executorConfig, containerConfig: containerConfig}
 	if executorConfig.Type == config.ExecutorConfigTypeValueContainer {
-		factory, err := container.NewContainerExecutorFactory(containerConfig)
+		factory, err := container.NewContainerExecutorFactory(containerConfig, logger)
 		if err != nil {
 			return nil, err
 		}

@@ -61,7 +61,8 @@ func (r *podmanRuntime) DeleteVolume(name string, force bool) error {
 
 	}
 	if exists {
-		return volumes.Remove(r.clientCtx, name, nil)
+		opts := &volumes.RemoveOptions{Force: &force}
+		return volumes.Remove(r.clientCtx, name, opts)
 	}
 	return nil
 }

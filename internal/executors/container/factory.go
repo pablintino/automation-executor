@@ -2,6 +2,7 @@ package container
 
 import (
 	"errors"
+	"go.uber.org/zap"
 
 	"github.com/google/uuid"
 	"github.com/pablintino/automation-executor/internal/config"
@@ -12,13 +13,16 @@ type ContainerExecutorFactory struct {
 	runtime         ContainerRuntime
 	containerConfig *config.ContainerExecutorConfig
 	imageBuilder    *imageProvider
+	logger          *zap.SugaredLogger
 }
 
 type supportImageResolver interface {
 	GetSupportImage() (string, error)
 }
 
-func NewContainerExecutorFactory(containerConfig *config.ContainerExecutorConfig) (*ContainerExecutorFactory, error) {
+func NewContainerExecutorFactory(
+	containerConfig *config.ContainerExecutorConfig,
+	logger *zap.SugaredLogger) (*ContainerExecutorFactory, error) {
 	runtime, err := getContainerRuntime(containerConfig)
 	if err != nil {
 		return nil, err
@@ -32,12 +36,13 @@ func NewContainerExecutorFactory(containerConfig *config.ContainerExecutorConfig
 		containerConfig: containerConfig,
 		runtime:         runtime,
 		imageBuilder:    builder,
+		logger:          logger,
 	}, nil
 
 }
 
 func (f *ContainerExecutorFactory) GetExecutor(runId uuid.UUID, opts *common.ExecutorOpts) (common.Executor, error) {
-	return NewContainerExecutor(f.containerConfig, f.runtime, f.imageBuilder, runId, opts)
+	return NewContainerExecutor(f.containerConfig, f.runtime, f.imageBuilder, runId, opts, f.logger)
 }
 
 func getContainerRuntime(containerConfig *config.ContainerExecutorConfig) (ContainerRuntime, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.uber.org/zap"
 	"io"
 	"strings"
 	"sync"
@@ -12,7 +13,6 @@ import (
 	"github.com/pablintino/automation-executor/internal/config"
 	"github.com/pablintino/automation-executor/internal/executors/common"
 	"github.com/pablintino/automation-executor/internal/utils"
-	"github.com/pablintino/automation-executor/logging"
 )
 
 const (
@@ -65,16 +65,25 @@ type ContainerExecutorImpl struct {
 	volumeName    string
 	opts          *common.ExecutorOpts
 	recovered     bool
+	logger        *zap.SugaredLogger
 }
 
-func NewContainerExecutor(config *config.ContainerExecutorConfig, runtime ContainerRuntime, imageResolver supportImageResolver, runId uuid.UUID, opts *common.ExecutorOpts) (*ContainerExecutorImpl, error) {
+func NewContainerExecutor(
+	config *config.ContainerExecutorConfig,
+	runtime ContainerRuntime,
+	imageResolver supportImageResolver,
+	runId uuid.UUID,
+	opts *common.ExecutorOpts,
+	logger *zap.SugaredLogger) (*ContainerExecutorImpl, error) {
 	if opts == nil {
 		return nil, fmt.Errorf("options cannot be nil")
 	}
 	if opts.WorkspaceDirectory == "" {
 		return nil, fmt.Errorf("workspace directory cannot be empty")
 	}
-	instance := &ContainerExecutorImpl{config: config, runId: runId, runtime: runtime, imageResolver: imageResolver, opts: opts}
+	instance := &ContainerExecutorImpl{
+		config: config, runId: runId, runtime: runtime, imageResolver: imageResolver, opts: opts, logger: logger,
+	}
 	return instance, instance.init()
 }
 
@@ -93,11 +102,11 @@ func (e *ContainerExecutorImpl) Prepare() error {
 func (e *ContainerExecutorImpl) Destroy() error {
 	var err error
 	if errC := e.destroyContainers(); errC != nil {
-		logging.Logger.Errorw("failed to destroy executor containers", "err", errC)
+		e.logger.Errorw("failed to destroy executor containers", "err", errC)
 		err = errors.Join(err, errC)
 	}
 	if errV := e.destroySharedVolume(); errV != nil {
-		logging.Logger.Errorw("failed to destroy executor shared volume", "err", err)
+		e.logger.Errorw("failed to destroy executor shared volume", "err", err)
 		err = errors.Join(err, errV)
 	}
 	return err
@@ -109,7 +118,7 @@ func (e *ContainerExecutorImpl) prepareSharedVolume() error {
 		return nil
 	}
 	volumeName := volumeNamePrefix + "-" + strings.ToLower(utils.RandomString(10))
-	logging.Logger.Infow("creating executor volume", "volumeName", volumeName, "runId", e.runId.String())
+	e.logger.Infow("creating executor volume", "volumeName", volumeName, "runId", e.runId.String())
 	name, err := e.runtime.CreateVolume(volumeName, e.buildResourceLabels(nil))
 	if err != nil {
 		return err
@@ -131,11 +140,11 @@ func (e *ContainerExecutorImpl) destroySharedVolume() error {
 func (e *ContainerExecutorImpl) destroyContainers() error {
 	payloadDestroyErr := e.clearCmdStore(&e.payloadCmd)
 	if payloadDestroyErr != nil {
-		logging.Logger.Errorw("failed to destroy executor payload container", "err", payloadDestroyErr)
+		e.logger.Errorw("failed to destroy executor payload container", "err", payloadDestroyErr)
 	}
 	supportDestroyErr := e.clearCmdStore(&e.supportCmd)
 	if supportDestroyErr != nil {
-		logging.Logger.Errorw("failed to destroy executor support container", "err", supportDestroyErr)
+		e.logger.Errorw("failed to destroy executor support container", "err", supportDestroyErr)
 	}
 	return errors.Join(payloadDestroyErr, supportDestroyErr)
 }
@@ -295,28 +304,28 @@ func (e *ContainerExecutorImpl) init() error {
 	// Check if there are resources already created
 	volumeName, initVolErr := e.initVolume()
 	if initVolErr != nil {
-		logging.Logger.Errorw("failure recovering executor volume",
+		e.logger.Errorw("failure recovering executor volume",
 			"err", initVolErr, "runId", e.runId.String())
 	}
 	initSupportErr := e.initStore(true, volumeName)
 	if initSupportErr != nil {
-		logging.Logger.Errorw("failure recovering support container",
+		e.logger.Errorw("failure recovering support container",
 			"err", initSupportErr, "runId", e.runId.String())
 	}
 	initPayloadErr := e.initStore(false, volumeName)
 	if initPayloadErr != nil {
-		logging.Logger.Errorw("failure recovering payload container",
+		e.logger.Errorw("failure recovering payload container",
 			"err", initPayloadErr, "runId", e.runId.String())
 	}
 	resultErr := errors.Join(initVolErr, initSupportErr, initPayloadErr)
 	if resultErr != nil {
 		if destroyCtrsErr := e.destroyContainers(); destroyCtrsErr != nil {
-			logging.Logger.Errorw("failure destroying unrecoverable containers",
+			e.logger.Errorw("failure destroying unrecoverable containers",
 				"err", initPayloadErr, "runId", e.runId.String())
 		}
 		if volumeName != "" {
 			if destroyVolErr := e.runtime.DeleteVolume(volumeName, true); destroyVolErr != nil {
-				logging.Logger.Errorw("failure destroying unrecoverable containers",
+				e.logger.Errorw("failure destroying unrecoverable containers",
 					"err", initPayloadErr, "runId", e.runId.String())
 			}
 		}
@@ -369,7 +378,7 @@ func (e *ContainerExecutorImpl) initStore(support bool, volume string) error {
 			_, volumeMounted := item.GetRunOpts().Volumes[volume]
 			var buildErr error
 			if volumeMounted {
-				containerCommand, buildErr = newContainerAttachedCommandFromContainer(item, e)
+				containerCommand, buildErr = newContainerAttachedCommandFromContainer(item, e, e.logger)
 			} else {
 				buildErr = fmt.Errorf("command container mathing cmdId has non consisted volumes %s", item.Id())
 			}
@@ -426,20 +435,29 @@ type containerAttachedCommand struct {
 		err      error
 		mtx      sync.RWMutex
 	}
+	logger *zap.SugaredLogger
 }
 
-func newContainerAttachedCommand(cmdUuid uuid.UUID, cmd *common.ExecutorCommand, container Container, executor *ContainerExecutorImpl) *containerAttachedCommand {
+func newContainerAttachedCommand(
+	cmdUuid uuid.UUID,
+	cmd *common.ExecutorCommand,
+	container Container,
+	executor *ContainerExecutorImpl) *containerAttachedCommand {
 	instance := &containerAttachedCommand{
 		container: container,
 		id:        cmdUuid,
 		cmd:       cmd,
 		executor:  executor,
 		cmdDone:   make(chan error),
+		logger:    executor.logger,
 	}
 	return instance
 }
 
-func newContainerAttachedCommandFromContainer(container Container, executor *ContainerExecutorImpl) (*containerAttachedCommand, error) {
+func newContainerAttachedCommandFromContainer(
+	container Container,
+	executor *ContainerExecutorImpl,
+	logger *zap.SugaredLogger) (*containerAttachedCommand, error) {
 	opts := container.GetRunOpts()
 	cmdUuid := extractContainerRunId(opts.Labels)
 	if cmdUuid == uuid.Nil {
@@ -559,7 +577,7 @@ func (c *containerAttachedCommand) attachRoutine(ctx context.Context, streams *c
 		requiresStart, canAttach = c.preFlightCheck()
 	}
 
-	logging.Logger.Debugw("container about to be started/attached",
+	c.logger.Debugw("container about to be started/attached",
 		"cmdId", c.Id(),
 		"runId", c.executor.runId,
 		"containerId", c.container.Id(),
@@ -573,13 +591,8 @@ func (c *containerAttachedCommand) attachRoutine(ctx context.Context, streams *c
 	} else if canAttach {
 		err = c.container.Attach(ctx, runStreams)
 	}
-	logging.Logger.Debugw("container attach finished",
-		"cmdId", c.Id(),
-		"runId", c.executor.runId,
-		"containerId", c.container.Id(),
-	)
 	if err := c.postRunSetState(err); err != nil {
-		logging.Logger.Debugw("post run error",
+		c.logger.Debugw("post run error",
 			"error", err,
 			"cmdId", c.Id(),
 			"runId", c.executor.runId,
@@ -617,7 +630,7 @@ func (c *containerAttachedCommand) postRunSetState(runErr error) error {
 		c.setStateError(runErr)
 	}
 
-	logging.Logger.Debugw("container post run reached",
+	c.logger.Debugw("container post run reached",
 		"cmdId", c.Id(),
 		"runId", c.executor.runId,
 		"containerId", c.container.Id(),

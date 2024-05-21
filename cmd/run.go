@@ -34,7 +34,7 @@ to quickly create a Cobra application.`,
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		executorFactory, err := executors.NewExecutorFactory(&config.ExecutorConfig, &config.ContainerExecutorConfig)
+		executorFactory, err := executors.NewExecutorFactory(&config.ExecutorConfig, &config.ContainerExecutorConfig, logging.Logger)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
