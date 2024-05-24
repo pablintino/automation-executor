@@ -54,6 +54,7 @@ type ContainerRuntime interface {
 	DeleteVolume(name string, force bool) error
 	Build(name string, containerFile string) error
 	ExistsImage(name string) (bool, error)
+	PullImage(name string) error
 	ExistsContainer(name string) (bool, error)
 	GetVolumesByLabels(labels map[string]string) ([]string, error)
 	GetContainersByLabels(labels map[string]string) ([]Container, error)

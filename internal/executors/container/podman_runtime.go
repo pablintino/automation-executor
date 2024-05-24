@@ -175,6 +175,11 @@ func (r *podmanRuntime) ExistsImage(name string) (bool, error) {
 	return exists, nil
 }
 
+func (r *podmanRuntime) PullImage(name string) error {
+	_, err := images.Pull(r.clientCtx, name, nil)
+	return err
+}
+
 func (r *podmanRuntime) GetVolumesByLabels(labels map[string]string) ([]string, error) {
 	opts := &volumes.ListOptions{Filters: map[string][]string{"label": buildLabelFilters(labels)}}
 	volumes, err := volumes.List(r.clientCtx, opts)

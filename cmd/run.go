@@ -118,7 +118,7 @@ done
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	go timerRoutine(runnningCmd)
+	//go timerRoutine(runnningCmd)
 	err = runnningCmd.Wait()
 	return runnningCmd, err
 }

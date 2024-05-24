@@ -17,8 +17,9 @@ import (
 
 const (
 	containerResourcesLabel                          = "app"
-	containerResourcesLabelValue                     = "automation-excutor"
+	containerResourcesLabelValue                     = "automation-executor"
 	containerResourcesLabelRunId                     = "automation-executor-run-id"
+	containerResourcesLabelCmdId                     = "automation-executor-cmd-id"
 	containerResourcesLabelContainerType             = "automation-executor-container-type"
 	containerResourcesLabelContainerTypeValuePayload = "payload"
 	containerResourcesLabelContainerTypeValueSupport = "support"
@@ -207,10 +208,22 @@ func (e *ContainerExecutorImpl) requestContainer(cmdUuid uuid.UUID, command *com
 		requiresInputStream = true
 	}
 
+	imgExists, err := e.runtime.ExistsImage(image)
+	if err != nil {
+		return nil, err
+	}
+	// If the image is not present in the runtime just pull it
+	if !imgExists {
+		if err := e.runtime.PullImage(image); err != nil {
+			return nil, err
+		}
+	}
+
+	computedLabels := map[string]string{containerResourcesLabelCmdId: cmdUuid.String()}
 	runOpts := &ContainerRunOpts{
 		Command:       command.Command,
 		Image:         image,
-		Labels:        e.buildContainerLabels(nil, command.IsSupport),
+		Labels:        e.buildContainerLabels(computedLabels, command.IsSupport),
 		Volumes:       e.buildMounts(),
 		Mounts:        e.config.ExtraMounts,
 		PreserveStdin: requiresInputStream,
@@ -378,7 +391,7 @@ func (e *ContainerExecutorImpl) initStore(support bool, volume string) error {
 			_, volumeMounted := item.GetRunOpts().Volumes[volume]
 			var buildErr error
 			if volumeMounted {
-				containerCommand, buildErr = newContainerAttachedCommandFromContainer(item, e, e.logger)
+				containerCommand, buildErr = newContainerAttachedCommandFromContainer(item, e)
 			} else {
 				buildErr = fmt.Errorf("command container mathing cmdId has non consisted volumes %s", item.Id())
 			}
@@ -456,10 +469,9 @@ func newContainerAttachedCommand(
 
 func newContainerAttachedCommandFromContainer(
 	container Container,
-	executor *ContainerExecutorImpl,
-	logger *zap.SugaredLogger) (*containerAttachedCommand, error) {
+	executor *ContainerExecutorImpl) (*containerAttachedCommand, error) {
 	opts := container.GetRunOpts()
-	cmdUuid := extractContainerRunId(opts.Labels)
+	cmdUuid := extractContainerCommandId(opts.Labels)
 	if cmdUuid == uuid.Nil {
 		return nil, fmt.Errorf("cannot parse cmd ID from %s container labels", container.Id())
 
@@ -689,8 +701,8 @@ func (c *containerAttachedCommand) setStateError(err error) {
 	c.state.err = err
 }
 
-func extractContainerRunId(labels map[string]string) uuid.UUID {
-	strRunId, ok := labels[containerResourcesLabelRunId]
+func extractContainerCommandId(labels map[string]string) uuid.UUID {
+	strRunId, ok := labels[containerResourcesLabelCmdId]
 	if !ok {
 		return uuid.Nil
 	}
