@@ -16,15 +16,15 @@ import (
 )
 
 const (
-	containerResourcesLabel                          = "app"
-	containerResourcesLabelValue                     = "automation-executor"
-	containerResourcesLabelRunId                     = "automation-executor-run-id"
-	containerResourcesLabelCmdId                     = "automation-executor-cmd-id"
-	containerResourcesLabelContainerType             = "automation-executor-container-type"
-	containerResourcesLabelContainerTypeValuePayload = "payload"
-	containerResourcesLabelContainerTypeValueSupport = "support"
-	volumeNamePrefix                                 = "automation-executor-volume"
-	containerPayloadNamePrefix                       = "automation-executor-payload"
+	containerResourcesLabel                     = "app"
+	containerResourcesLabelValue                = "automation-executor"
+	containerResourcesLabelRunId                = "automation-executor-run-id"
+	containerResourcesLabelCmdId                = "automation-executor-cmd-id"
+	containerResourcesLabelContainerType        = "automation-executor-container-type"
+	containerResourcesContainerTypeValuePayload = "payload"
+	containerResourcesContainerTypeValueSupport = "support"
+	containerResourceNamePrefix                 = "automation-executor"
+	volumeNamePrefix                            = "automation-executor-volume"
 )
 
 type containerRunningCommand interface {
@@ -228,7 +228,11 @@ func (e *ContainerExecutorImpl) requestContainer(cmdUuid uuid.UUID, command *com
 		Mounts:        e.config.ExtraMounts,
 		PreserveStdin: requiresInputStream,
 	}
-	name := containerPayloadNamePrefix + "-" + strings.ReplaceAll(cmdUuid.String(), "-", "")[:10]
+	nameType := containerResourcesContainerTypeValuePayload
+	if command.IsSupport {
+		nameType = containerResourcesContainerTypeValueSupport
+	}
+	name := fmt.Sprintf("%s-%s-%s", containerResourceNamePrefix, nameType, strings.ReplaceAll(cmdUuid.String(), "-", "")[:10])
 	container, err := e.runtime.CreateContainer(name, runOpts)
 	return container, err
 }
@@ -296,9 +300,9 @@ func (e *ContainerExecutorImpl) buildResourceLabels(labels map[string]string) ma
 
 func (e *ContainerExecutorImpl) buildContainerLabels(labels map[string]string, isSupport bool) map[string]string {
 	result := e.buildResourceLabels(labels)
-	labelTypeValue := containerResourcesLabelContainerTypeValuePayload
+	labelTypeValue := containerResourcesContainerTypeValuePayload
 	if isSupport {
-		labelTypeValue = containerResourcesLabelContainerTypeValueSupport
+		labelTypeValue = containerResourcesContainerTypeValueSupport
 	}
 	result[containerResourcesLabelContainerType] = labelTypeValue
 	return result
@@ -717,5 +721,5 @@ func extractContainerTypeSupportFromLabels(labels map[string]string) (bool, erro
 	if !ok {
 		return false, errors.New("container type label not present")
 	}
-	return containerType == containerResourcesLabelContainerTypeValueSupport, nil
+	return containerType == containerResourcesContainerTypeValueSupport, nil
 }
