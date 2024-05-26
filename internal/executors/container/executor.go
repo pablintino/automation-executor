@@ -559,6 +559,9 @@ func (c *containerAttachedCommand) Kill() error {
 		// Delete the resources (container). If we are attached
 		// the attach cmd will return, and it will process the
 		// state fetch/set and release the waiting consumers.
+		c.logger.Infow("killing container attached command",
+			"runId", c.executor.runId.String(), "cmdId", c.id.String(),
+		)
 		return c.executor.destroyRunningCmdResources(c)
 	}
 	return nil
