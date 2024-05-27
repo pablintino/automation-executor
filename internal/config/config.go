@@ -30,6 +30,7 @@ type ContainerExecutorConfig struct {
 	Flavor            string            `koanf:"flavor"`
 	BuildSupportImage bool              `koanf:"build-support-image"`
 	ExtraMounts       map[string]string `koanf:"extra-mounts"`
+	ExtraLabels       map[string]string `koanf:"extra-labels"`
 }
 
 type ExecutorConfig struct {

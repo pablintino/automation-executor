@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.uber.org/zap"
-	"io"
+	"maps"
 	"strings"
 	"sync"
+
+	"go.uber.org/zap"
 
 	"github.com/google/uuid"
 	"github.com/pablintino/automation-executor/internal/config"
@@ -290,6 +291,7 @@ func (e *ContainerExecutorImpl) destroyRunningCmdResources(cmd containerRunningC
 
 func (e *ContainerExecutorImpl) buildResourceLabels(labels map[string]string) map[string]string {
 	targetLabels := make(map[string]string)
+	maps.Copy(targetLabels, e.config.ExtraLabels)
 	for key, value := range labels {
 		targetLabels[key] = value
 	}
@@ -578,17 +580,22 @@ func (c *containerAttachedCommand) waitFinishedBarrier() (bool, error) {
 }
 
 func (c *containerAttachedCommand) attachRoutine(ctx context.Context, streams *common.ExecutorStreams, isNew bool) {
-
-	var reader io.Reader
+	runStreams := &ContainerStreams{}
 	// Only attach in the first run, when the start is performed
 	if c.cmd.Script != "" {
-		reader = strings.NewReader(c.cmd.Script)
+		runStreams.Input = strings.NewReader(c.cmd.Script)
 	}
-	runStreams := &ContainerStreams{
-		Output: streams.OutputStream,
-		Error:  streams.ErrorStream,
-		Input:  reader,
+
+	if streams == nil {
+		streams = new(common.ExecutorStreams)
 	}
+	if streams.OutputStream != nil {
+		runStreams.Output = streams.OutputStream
+	}
+	if streams.ErrorStream != nil {
+		runStreams.Error = streams.ErrorStream
+	}
+
 	requiresStart := isNew
 	canAttach := isNew
 	// Avoid running the preflight if the container was created in the same run

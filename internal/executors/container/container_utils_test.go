@@ -33,6 +33,26 @@ func cleanUpAllPodmanTestResources() error {
 	return nil
 }
 
+func deleteSingleContainer(id string) (bool, error) {
+	return deleteSingleResource("container", id)
+}
+
+func deleteSingleVolume(id string) (bool, error) {
+	return deleteSingleResource("volume", id)
+}
+
+func deleteSingleResource(resource string, id string) (bool, error) {
+	exists, err := checkResourceExists(resource, id)
+	if err != nil || !exists {
+		return false, err
+	}
+	if err := exec.Command("podman", resource, "rm", "--force").Run(); err != nil {
+		zap.S().Errorw("failed to remove podman resource", "resource", resource, "id", id, "error", err)
+		return false, err
+	}
+	return true, nil
+}
+
 func getPodmanVolumesByLabels(labels map[string]string) ([]string, error) {
 	return getResourcesByLabels("volume", labels)
 }
