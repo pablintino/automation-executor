@@ -126,7 +126,7 @@ func (r *podmanRuntime) StartAttach(ctx context.Context, id string, streams *Con
 	case err := <-attachErr:
 		return err
 	case <-ctx.Done():
-		return fmt.Errorf("container start and attach aborted %s", id)
+		return ErrContainerRunAborted
 	}
 }
 
@@ -142,7 +142,7 @@ func (r *podmanRuntime) Attach(ctx context.Context, id string, streams *Containe
 	case err := <-attachErr:
 		return err
 	case <-ctx.Done():
-		return fmt.Errorf("container attach aborted %s", id)
+		return ErrContainerRunAborted
 	}
 }
 

@@ -37,6 +37,7 @@ type RunningCommand interface {
 }
 
 type Executor interface {
+	Id() uuid.UUID
 	Prepare() error
 	Destroy() error
 	Recovered() bool

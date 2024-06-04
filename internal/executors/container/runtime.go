@@ -3,6 +3,8 @@ package container
 import (
 	"context"
 	"io"
+
+	"github.com/pablintino/automation-executor/internal/utils"
 )
 
 const (
@@ -11,6 +13,8 @@ const (
 	containerStateCreated    = "created"
 	containerStateConfigured = "configured"
 	containerStateRunning    = "running"
+
+	ErrContainerRunAborted = utils.ConstError("container run aborted")
 )
 
 type ContainerRunOpts struct {

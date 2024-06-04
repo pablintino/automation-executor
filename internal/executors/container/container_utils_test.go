@@ -53,6 +53,44 @@ func deleteSingleResource(resource string, id string) (bool, error) {
 	return true, nil
 }
 
+func createVolume(name string, labels map[string]string) (string, error) {
+	opts := []string{"volume", "create", name}
+	for label, value := range labels {
+		if value != "" {
+			opts = append(opts, "--label", fmt.Sprintf("%s=%s", label, value))
+		} else {
+			opts = append(opts, "--label", name)
+		}
+	}
+	if err := exec.Command("podman", opts...).Run(); err != nil {
+		zap.S().Errorw("failed to create podman volume", "name", name, "error", err)
+		return "", err
+	}
+	return name, nil
+}
+
+func createContainer(name string, image string, cmd []string, labels map[string]string, volumes map[string]string) (string, error) {
+	opts := []string{"container", "run", "-d", "--name", name}
+	for vol, dest := range volumes {
+		opts = append(opts, "--volume", fmt.Sprintf("%s:%s", vol, dest))
+	}
+	for label, value := range labels {
+		if value != "" {
+			opts = append(opts, "--label", fmt.Sprintf("%s=%s", label, value))
+		} else {
+			opts = append(opts, "--label", name)
+		}
+	}
+	opts = append(opts, image)
+	opts = append(opts, cmd...)
+	out, err := exec.Command("podman", opts...).Output()
+	if err != nil {
+		zap.S().Errorw("failed to create podman container", "name", name, "error", err)
+		return "", err
+	}
+	return strings.TrimRight(string(out), "\n"), nil
+}
+
 func getPodmanVolumesByLabels(labels map[string]string) ([]string, error) {
 	return getResourcesByLabels("volume", labels)
 }
@@ -85,6 +123,10 @@ func inspectResource(resource string, id string) (map[string]interface{}, error)
 		return nil, err
 	}
 	return jsonList[0], nil
+}
+
+func inspectContainer(id string) (map[string]interface{}, error) {
+	return inspectResource("container", id)
 }
 
 func checkResourceExists(resource string, id string) (bool, error) {
@@ -141,4 +183,16 @@ func assertVolumeIsMounted(t *testing.T, inspectData map[string]interface{}, nam
 		}
 	}
 	assert.Failf(t, "volume mount not found %s", name)
+}
+
+func assertContainerLabelExists(t *testing.T, containerData map[string]interface{}, name string, value interface{}) {
+	if configRaw, ok := containerData["Config"].(map[string]interface{}); ok {
+		if labelsRaw, ok := configRaw["Labels"].(map[string]interface{}); ok {
+			if labelValue, ok := labelsRaw[name].(interface{}); ok {
+				assert.Equal(t, value, labelValue)
+				return
+			}
+		}
+	}
+	assert.Failf(t, "label not found %s", name)
 }

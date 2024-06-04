@@ -89,6 +89,10 @@ func NewContainerExecutor(
 	return instance, instance.init()
 }
 
+func (e *ContainerExecutorImpl) Id() uuid.UUID {
+	return e.runId
+}
+
 func (e *ContainerExecutorImpl) Recovered() bool {
 	return e.recovered
 }
@@ -354,6 +358,8 @@ func (e *ContainerExecutorImpl) init() error {
 	if volumeName != "" {
 		// If the volume exists the executor was created by another call before
 		e.recovered = true
+		// Set the name of the recovered volume to avoid recreating it
+		e.volumeName = volumeName
 	}
 	return nil
 }
@@ -633,7 +639,7 @@ func (c *containerAttachedCommand) attachRoutine(ctx context.Context, streams *c
 func (c *containerAttachedCommand) postRunSetState(runErr error) error {
 	c.state.mtx.Lock()
 	defer c.state.mtx.Unlock()
-
+	aborted := errors.Is(runErr, ErrContainerRunAborted)
 	if runErr == nil {
 		exists, err := c.executor.runtime.ExistsContainer(c.container.Id())
 		if err != nil {
@@ -647,11 +653,10 @@ func (c *containerAttachedCommand) postRunSetState(runErr error) error {
 		} else {
 			// If the container doesn't exit it's usually because
 			// it has been destroyed underneath
-			c.state.code = 1
-			c.state.killed = true
-			c.state.finished = true
+			c.setStateKilled()
 		}
-
+	} else if aborted {
+		c.setStateKilled()
 	} else {
 		c.setStateError(runErr)
 	}
@@ -663,6 +668,7 @@ func (c *containerAttachedCommand) postRunSetState(runErr error) error {
 		"exitCode", c.state.code,
 		"error", c.state.err,
 		"killed", c.state.killed,
+		"aborted", aborted,
 	)
 
 	clearErr := c.executor.clearCmdStoreFromCmd(c, false)
@@ -691,8 +697,8 @@ func (c *containerAttachedCommand) preFlightCheck() (bool, bool) {
 	if c.state.finished {
 		return false, false
 	}
-	exists, err := c.executor.runtime.ExistsContainer(c.container.Id())
-	if err != nil || !exists {
+
+	if exists, err := c.executor.runtime.ExistsContainer(c.container.Id()); err != nil || !exists {
 		return false, false
 	}
 
@@ -713,6 +719,13 @@ func (c *containerAttachedCommand) setStateError(err error) {
 	c.state.finished = true
 	c.state.code = 1
 	c.state.err = err
+}
+
+func (c *containerAttachedCommand) setStateKilled() {
+	// Assume the called has properly called the mutex
+	c.state.code = 1
+	c.state.killed = true
+	c.state.finished = true
 }
 
 func extractContainerCommandId(labels map[string]string) uuid.UUID {
