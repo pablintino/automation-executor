@@ -25,14 +25,18 @@ type ExecutorOpts struct {
 	WorkspaceDirectory string
 }
 
+type CommandResult struct {
+	Finished   bool
+	StatusCode int
+	Killed     bool
+	Error      error
+}
+
 type RunningCommand interface {
 	Id() uuid.UUID
-	Finished() bool
-	Killed() bool
-	StatusCode() int
-	Error() error
-	Wait() error
-	AttachWait(ctx context.Context, streams *ExecutorStreams) error
+	State() CommandResult
+	Wait() CommandResult
+	AttachWait(ctx context.Context, streams *ExecutorStreams) CommandResult
 	Kill() error
 }
 

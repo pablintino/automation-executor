@@ -125,7 +125,7 @@ func (e *ContainerExecutorImpl) prepareSharedVolume() error {
 	}
 	volumeName := volumeNamePrefix + "-" + strings.ToLower(utils.RandomString(10))
 	e.logger.Infow("creating executor volume", "volumeName", volumeName, "runId", e.runId.String())
-	name, err := e.runtime.CreateVolume(volumeName, e.buildResourceLabels(nil))
+	name, err := e.runtime.CreateVolume(volumeName, e.buildNewResourceLabels(nil))
 	if err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (e *ContainerExecutorImpl) requestContainer(cmdUuid uuid.UUID, command *com
 	runOpts := &ContainerRunOpts{
 		Command:       command.Command,
 		Image:         image,
-		Labels:        e.buildContainerLabels(computedLabels, command.IsSupport),
+		Labels:        e.buildNewContainerLabels(computedLabels, command.IsSupport),
 		Volumes:       e.buildMounts(),
 		Mounts:        e.config.ExtraMounts,
 		PreserveStdin: requiresInputStream,
@@ -293,24 +293,39 @@ func (e *ContainerExecutorImpl) destroyRunningCmdResources(cmd containerRunningC
 	return nil
 }
 
-func (e *ContainerExecutorImpl) buildResourceLabels(labels map[string]string) map[string]string {
-	targetLabels := make(map[string]string)
+func (e *ContainerExecutorImpl) buildNewResourceLabels(labels map[string]string) map[string]string {
+	targetLabels := e.buildCommonLabels()
 	maps.Copy(targetLabels, e.config.ExtraLabels)
 	for key, value := range labels {
 		targetLabels[key] = value
 	}
-	targetLabels[containerResourcesLabelRunId] = e.runId.String()
-	targetLabels[containerResourcesLabel] = containerResourcesLabelValue
 	return targetLabels
 }
 
-func (e *ContainerExecutorImpl) buildContainerLabels(labels map[string]string, isSupport bool) map[string]string {
-	result := e.buildResourceLabels(labels)
+func (e *ContainerExecutorImpl) buildNewContainerLabels(labels map[string]string, isSupport bool) map[string]string {
+	result := e.buildNewResourceLabels(labels)
+	appendContainerTypeLabels(result, isSupport)
+	return result
+}
+
+func appendContainerTypeLabels(dst map[string]string, isSupport bool) {
 	labelTypeValue := containerResourcesContainerTypeValuePayload
 	if isSupport {
 		labelTypeValue = containerResourcesContainerTypeValueSupport
 	}
-	result[containerResourcesLabelContainerType] = labelTypeValue
+	dst[containerResourcesLabelContainerType] = labelTypeValue
+}
+
+func (e *ContainerExecutorImpl) buildContainerQueryLabels(isSupport bool) map[string]string {
+	result := e.buildCommonLabels()
+	appendContainerTypeLabels(result, isSupport)
+	return result
+}
+
+func (e *ContainerExecutorImpl) buildCommonLabels() map[string]string {
+	result := make(map[string]string)
+	result[containerResourcesLabelRunId] = e.runId.String()
+	result[containerResourcesLabel] = containerResourcesLabelValue
 	return result
 }
 
@@ -365,7 +380,9 @@ func (e *ContainerExecutorImpl) init() error {
 }
 
 func (e *ContainerExecutorImpl) initVolume() (string, error) {
-	volumes, err := e.runtime.GetVolumesByLabels(e.buildResourceLabels(nil))
+	// Query volumes using the common labels. Do not filter including
+	// the extra ones, that may change.
+	volumes, err := e.runtime.GetVolumesByLabels(e.buildCommonLabels())
 	if err != nil {
 		return "", nil
 	}
@@ -392,7 +409,9 @@ func (e *ContainerExecutorImpl) initVolume() (string, error) {
 }
 
 func (e *ContainerExecutorImpl) initStore(support bool, volume string) error {
-	containerList, err := e.runtime.GetContainersByLabels(e.buildContainerLabels(nil, support))
+	// Query containers using the common labels. Do not filter including
+	// the extra ones, that may change.
+	containerList, err := e.runtime.GetContainersByLabels(e.buildContainerQueryLabels(support))
 	if err != nil {
 		return err
 	}
@@ -513,44 +532,31 @@ func newContainerAttachedCommandFromContainer(
 func (c *containerAttachedCommand) Id() uuid.UUID {
 	return c.id
 }
-func (c *containerAttachedCommand) Finished() bool {
+func (c *containerAttachedCommand) State() common.CommandResult {
 	c.state.mtx.Lock()
 	defer c.state.mtx.Unlock()
-	return c.state.finished
+	return common.CommandResult{
+		Finished:   c.state.finished,
+		Killed:     c.state.killed,
+		StatusCode: c.state.code,
+		Error:      c.state.err,
+	}
 }
 
-func (c *containerAttachedCommand) Killed() bool {
-	c.state.mtx.Lock()
-	defer c.state.mtx.Unlock()
-	return c.state.killed
-}
-
-func (c *containerAttachedCommand) StatusCode() int {
-	c.state.mtx.Lock()
-	defer c.state.mtx.Unlock()
-	return c.state.code
-}
-
-func (c *containerAttachedCommand) Error() error {
-	c.state.mtx.Lock()
-	defer c.state.mtx.Unlock()
-	return c.state.err
-}
-
-func (c *containerAttachedCommand) Wait() error {
-	finished, err := c.waitFinishedBarrier()
+func (c *containerAttachedCommand) Wait() common.CommandResult {
+	finished, err := c.checkFinished()
 	if err != nil || finished {
-		return err
+		return c.State()
 	}
 	//Wait till done (closed)
 	<-c.cmdDone
-	return c.state.err
+	return c.State()
 }
 
-func (c *containerAttachedCommand) AttachWait(ctx context.Context, streams *common.ExecutorStreams) error {
-	finished, err := c.waitFinishedBarrier()
+func (c *containerAttachedCommand) AttachWait(ctx context.Context, streams *common.ExecutorStreams) common.CommandResult {
+	finished, err := c.checkFinished()
 	if err != nil || finished {
-		return err
+		return c.State()
 	}
 
 	c.cmdOnce.Do(func() {
@@ -559,11 +565,12 @@ func (c *containerAttachedCommand) AttachWait(ctx context.Context, streams *comm
 
 	//Wait till done (closed)
 	<-c.cmdDone
-	return c.state.err
+	return c.State()
 }
 
 func (c *containerAttachedCommand) Kill() error {
-	if !c.Finished() {
+	finished, _ := c.checkFinished()
+	if !finished {
 		// Delete the resources (container). If we are attached
 		// the attach cmd will return, and it will process the
 		// state fetch/set and release the waiting consumers.
@@ -579,7 +586,7 @@ func (c *containerAttachedCommand) Container() Container {
 	return c.container
 }
 
-func (c *containerAttachedCommand) waitFinishedBarrier() (bool, error) {
+func (c *containerAttachedCommand) checkFinished() (bool, error) {
 	c.state.mtx.Lock()
 	defer c.state.mtx.Unlock()
 	return c.state.finished, c.state.err

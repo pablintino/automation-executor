@@ -28,6 +28,8 @@ const (
 		"echo \"" + defaultCmdStdoutMessagePrefix + " $i\";" +
 		"echo \"" + defaultCmdStderrMessagePrefix + " $i\" >&2;" +
 		"sleep 0.5; done"
+	executorTestStubLabelName  string = "automation-executor-test-label"
+	executorTestStubLabelValue string = "automation-executor-test-label-value"
 )
 
 type cleanupRegistry struct {
@@ -89,7 +91,7 @@ func waitGetContainerData(
 	execCommand *common.ExecutorCommand,
 	runningCmd common.RunningCommand,
 	runId uuid.UUID,
-	catchFn func(common.RunningCommand, map[string]interface{})) (map[string]interface{}, error) {
+	catchFn func(common.RunningCommand, map[string]interface{})) (map[string]interface{}, common.CommandResult) {
 	var doneFlag atomic.Bool
 	containerDataChan := make(chan map[string]interface{})
 	go func() {
@@ -121,9 +123,9 @@ func waitGetContainerData(
 		}
 		containerDataChan <- containerData
 	}()
-	err := runningCmd.Wait()
+	state := runningCmd.Wait()
 	doneFlag.Store(true)
-	return <-containerDataChan, err
+	return <-containerDataChan, state
 }
 
 func assertContainerCommandSuccessStream(brt *baseRunTest, bufferContent string, prefix string, runTime int, strict bool) {
@@ -201,10 +203,11 @@ func assertContainerCommandSuccess(brt *baseRunTest, data *commandData) {
 	assert.NotNil(brt.t, data.runningCmd)
 	assertContainerCommandSuccessStreams(brt, data, !brt.testParams.preCreateRunningResources)
 	if data.runningCmd != nil {
-		assert.Equal(brt.t, 0, data.runningCmd.StatusCode())
-		assert.True(brt.t, data.runningCmd.Finished())
-		assert.False(brt.t, data.runningCmd.Killed())
-		assert.Nil(brt.t, data.runningCmd.Error())
+		cmdState := data.runningCmd.State()
+		assert.Equal(brt.t, 0, cmdState.StatusCode)
+		assert.True(brt.t, cmdState.Finished)
+		assert.False(brt.t, cmdState.Killed)
+		assert.Nil(brt.t, cmdState.Error)
 	}
 	// Both running pointers should be empty
 	isSupport := data == brt.supportCommandData
@@ -216,6 +219,7 @@ func assertContainerCommandSuccess(brt *baseRunTest, data *commandData) {
 		return
 	}
 
+	assertContainerExtraLabels(brt, data)
 	assertVolumeIsMounted(brt.t, data.containerInfo, brt.workspaceVolume, brt.testParams.executorOpts.WorkspaceDirectory)
 	ranImage := data.containerInfo["ImageName"].(string)
 	if isSupport && data.testParams.image == "" {
@@ -241,15 +245,28 @@ func assertSuccessOnContainersFinished(brt *baseRunTest) error {
 	return nil
 }
 
+func assertContainerExtraLabels(brt *baseRunTest, cmdData *commandData) {
+	if brt.executorConfig.ExtraLabels == nil || cmdData.containerInfo == nil {
+		return
+	}
+	for name, value := range brt.executorConfig.ExtraLabels {
+		assertContainerLabelExists(brt.t, cmdData.containerInfo, name, value)
+	}
+}
+
 func assertKilledContainerOnContainersFinished(brt *baseRunTest, cmdData *commandData) {
 	assertContainerCommandSuccessStreams(brt, cmdData, false)
 	assert.NotNil(brt.t, cmdData.runningCmd)
 	if cmdData.runningCmd != nil {
-		assert.Equal(brt.t, 1, cmdData.runningCmd.StatusCode())
-		assert.True(brt.t, cmdData.runningCmd.Finished())
-		assert.True(brt.t, cmdData.runningCmd.Killed())
-		assert.Nil(brt.t, cmdData.runningCmd.Error())
+		cmdState := cmdData.runningCmd.State()
+		assert.Equal(brt.t, 1, cmdState.StatusCode)
+		assert.True(brt.t, cmdState.Finished)
+		assert.True(brt.t, cmdState.Killed)
+		assert.Nil(brt.t, cmdState.Error)
 		assert.NotNil(brt.t, cmdData.containerInfo)
+		if cmdData.containerInfo != nil {
+			assertContainerExtraLabels(brt, cmdData)
+		}
 	}
 
 	assert.NotNil(brt.t, cmdData.runningCmd)
@@ -280,20 +297,21 @@ func assertContainerRecovered(brt *baseRunTest, cmdData *commandData) {
 	isSupport := cmdData == brt.supportCommandData
 	runningCmd := brt.executor.GetRunningCommand(isSupport)
 	assert.NotNil(brt.t, runningCmd)
+	assert.NotNil(brt.t, cmdData.containerInfo)
 	if runningCmd != nil {
 		assert.Nil(brt.t, brt.executor.GetPreviousRunningCommand(isSupport))
-		assert.False(brt.t, runningCmd.Finished())
-		assert.False(brt.t, runningCmd.Killed())
-		assert.NoError(brt.t, runningCmd.Error())
-		assert.Equal(brt.t, 0, runningCmd.StatusCode())
-	}
+		cmdState := runningCmd.State()
+		assert.False(brt.t, cmdState.Finished)
+		assert.False(brt.t, cmdState.Killed)
+		assert.NoError(brt.t, cmdState.Error)
+		assert.Equal(brt.t, 0, cmdState.StatusCode)
 
-	assert.NotNil(brt.t, cmdData.containerInfo)
-	if cmdData.containerInfo != nil {
-		assertContainerLabelExists(brt.t, cmdData.containerInfo,
-			containerResourcesLabelCmdId, runningCmd.Id().String())
-		assertContainerLabelExists(brt.t, cmdData.containerInfo,
-			containerResourcesLabelRunId, brt.runId.String())
+		if cmdData.containerInfo != nil {
+			assertContainerLabelExists(brt.t, cmdData.containerInfo,
+				containerResourcesLabelCmdId, runningCmd.Id().String())
+			assertContainerLabelExists(brt.t, cmdData.containerInfo,
+				containerResourcesLabelRunId, brt.runId.String())
+		}
 	}
 }
 
@@ -327,9 +345,6 @@ func commonExecutorOnDestroyStart(brt *baseRunTest) error {
 func TestCommonRunBasedTests(t *testing.T) {
 	logging.Initialize(true)
 	defer logging.Release()
-	t.Cleanup(func() {
-		cleanUpAllPodmanTestResources()
-	})
 
 	tests := []struct {
 		name string
@@ -371,6 +386,9 @@ func TestCommonRunBasedTests(t *testing.T) {
 				},
 				supportCmdParams: executorCommandParams{
 					image: executorTestImageBaseNonAlpine,
+				},
+				executorConfig: &config.ContainerExecutorConfig{
+					ExtraLabels: map[string]string{executorTestStubLabelName: executorTestStubLabelValue},
 				},
 				executorOpts:         &common.ExecutorOpts{WorkspaceDirectory: "/tmp/workspace"},
 				onDestroyStart:       commonExecutorOnDestroyStart,
@@ -560,6 +578,7 @@ func (b *baseRunTest) runInstantiate() error {
 	if b.executorConfig == nil {
 		b.executorConfig = &config.ContainerExecutorConfig{}
 	}
+
 	runtime, err := newPodmanRuntime(b.executorConfig)
 	require.NoError(b.t, err)
 	b.runtime = runtime
@@ -659,7 +678,7 @@ func (b *baseRunTest) runCommand(commandParams *executorCommandParams) {
 		return
 	}
 	cmdData.runningCmd = runningCmd
-	containerData, err := waitGetContainerData(b.t, cmd, runningCmd, b.runId,
+	containerData, _ := waitGetContainerData(b.t, cmd, runningCmd, b.runId,
 		func(rc common.RunningCommand, containerInfo map[string]interface{}) {
 			cmdData.containerInfo = containerInfo
 			if containerInfo != nil {
@@ -681,7 +700,6 @@ func (b *baseRunTest) runCommand(commandParams *executorCommandParams) {
 				}
 			}
 		})
-	// Do not assert the returned err, as we may want to check it later
 	assert.NotNil(b.t, containerData)
 }
 

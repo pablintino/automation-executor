@@ -15,24 +15,6 @@ import (
 // DO NOT USE the API. These utils needs to be completely agnostic and API decoupled. Using
 // the cli removes the need to care about API versioning for the tests
 // Do not use the logging lib. These test utils should be as agnostic of the code as possible
-const testResourcesLabel = "automation-executor-test-resource"
-
-func cleanUpAllPodmanTestResources() error {
-	containerIds, err := getResourcesByLabels("container", map[string]string{testResourcesLabel: ""})
-	if err != nil {
-		return err
-	}
-	if len(containerIds) > 0 {
-		opts := []string{"container", "rm", "--force"}
-		opts = append(opts, containerIds...)
-		if err := exec.Command("podman", opts...).Run(); err != nil {
-			zap.S().Errorw("failed to remove podman containers", "error", err)
-			return err
-		}
-	}
-	return nil
-}
-
 func deleteSingleContainer(id string) (bool, error) {
 	return deleteSingleResource("container", id)
 }

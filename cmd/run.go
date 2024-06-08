@@ -3,14 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
-	"time"
-
 	"github.com/google/uuid"
 	"github.com/pablintino/automation-executor/internal/config"
 	"github.com/pablintino/automation-executor/internal/executors"
 	"github.com/pablintino/automation-executor/internal/executors/common"
 	"github.com/pablintino/automation-executor/logging"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -50,20 +48,21 @@ to quickly create a Cobra application.`,
 
 		var runningCmd common.RunningCommand
 		if executor.Recovered() {
-			runningCmd, err = recoveredExecutorRun(executor)
+			runningCmd = recoveredExecutorRun(executor)
 		} else {
-			runningCmd, err = newExecutorRun(executor)
+			runningCmd = newExecutorRun(executor)
 		}
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
+		runningCmdState := runningCmd.State()
 		logging.Logger.Infow(
 			"result",
-			"exitCode", runningCmd.StatusCode(),
-			"finished", runningCmd.Finished(),
-			"error", runningCmd.Error(),
-			"killed", runningCmd.Killed(),
+			"exitCode", runningCmdState.StatusCode,
+			"finished", runningCmdState.Finished,
+			"error", runningCmdState.Error,
+			"killed", runningCmdState.Killed,
 		)
 
 		err = executor.Destroy()
@@ -74,21 +73,21 @@ to quickly create a Cobra application.`,
 	},
 }
 
-func recoveredExecutorRun(executor common.Executor) (common.RunningCommand, error) {
+func recoveredExecutorRun(executor common.Executor) common.RunningCommand {
 	cmd := executor.GetRunningCommand(false)
 	if cmd != nil {
 		streams := &common.ExecutorStreams{
 			OutputStream: os.Stdout,
 		}
-		return cmd, cmd.AttachWait(context.Background(), streams)
+		cmd.AttachWait(context.Background(), streams)
+		return cmd
 
 	} else {
-		cmd = executor.GetPreviousRunningCommand(false)
-		return cmd, nil
+		return executor.GetPreviousRunningCommand(false)
 	}
 }
 
-func newExecutorRun(executor common.Executor) (common.RunningCommand, error) {
+func newExecutorRun(executor common.Executor) common.RunningCommand {
 	err := executor.Prepare()
 	if err != nil {
 		fmt.Println(err)
@@ -119,15 +118,8 @@ done
 		os.Exit(1)
 	}
 	//go timerRoutine(runnningCmd)
-	err = runnningCmd.Wait()
-	return runnningCmd, err
-}
-
-func timerRoutine(cmd common.RunningCommand) {
-	timer1 := time.NewTimer(2 * time.Second)
-
-	<-timer1.C
-	cmd.Kill()
+	runnningCmd.Wait()
+	return runnningCmd
 }
 
 func init() {
