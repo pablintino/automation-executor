@@ -170,7 +170,7 @@ func assertVolumeIsMounted(t *testing.T, inspectData map[string]interface{}, nam
 func assertContainerLabelExists(t *testing.T, containerData map[string]interface{}, name string, value interface{}) {
 	if configRaw, ok := containerData["Config"].(map[string]interface{}); ok {
 		if labelsRaw, ok := configRaw["Labels"].(map[string]interface{}); ok {
-			if labelValue, ok := labelsRaw[name].(interface{}); ok {
+			if labelValue, ok := labelsRaw[name]; ok {
 				assert.Equal(t, value, labelValue)
 				return
 			}

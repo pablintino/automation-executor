@@ -15,8 +15,8 @@ const (
 )
 
 type DatabaseConfig struct {
-	DataSource string `koanf:"datasource"`
-	Driver     string `koanf:"driver"`
+	DataSource    string `koanf:"datasource"`
+	EncryptionKey string `koanf:"encryption-key"`
 }
 
 type ShellConfig struct {
@@ -31,6 +31,7 @@ type ContainerExecutorConfig struct {
 	BuildSupportImage bool              `koanf:"build-support-image"`
 	ExtraMounts       map[string]string `koanf:"extra-mounts"`
 	ExtraLabels       map[string]string `koanf:"extra-labels"`
+	SkipRegistryTLS   bool              `koanf:"skip-registry-tls"`
 }
 
 type ExecutorConfig struct {

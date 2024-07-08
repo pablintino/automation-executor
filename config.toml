@@ -1,13 +1,13 @@
 [database]
-driver="postgres"
-datasource="user=automation-executor dbname=automation-executor sslmode=disable password=12345 host=localhost"
+datasource = "user=automation-executor dbname=automation-executor sslmode=disable password=12345 host=localhost"
+encryption-key = "4aa155c4-29ce-45b4-a2b5-d417acb329fb"
 
 [storage]
-workspaces-location="/home/pablintino/Desktop/test-ws"
+workspaces-location = "/home/pablintino/Desktop/test-ws"
 
 [executor]
-type="container"
+type = "container"
 
 [executor-container]
-flavor="podman"
-build-support-image=true
+flavor = "podman"
+build-support-image = true

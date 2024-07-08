@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"github.com/pablintino/automation-executor/internal/models"
 	"io"
 
 	"github.com/pablintino/automation-executor/internal/utils"
@@ -51,6 +52,10 @@ type Container interface {
 	Id() string
 	StartAttach(ctx context.Context, streams *ContainerStreams) error
 	Attach(ctx context.Context, streams *ContainerStreams) error
+}
+
+type ImageSecretResolver interface {
+	GetSecretByRegistry(registry string) (*models.RegistrySecretModel, error)
 }
 
 type ContainerRuntime interface {

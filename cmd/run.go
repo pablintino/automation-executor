@@ -1,12 +1,10 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/pablintino/automation-executor/internal/config"
-	"github.com/pablintino/automation-executor/internal/executors"
-	"github.com/pablintino/automation-executor/internal/executors/common"
+	"github.com/pablintino/automation-executor/internal/db"
+	"github.com/pablintino/automation-executor/internal/services/secrets"
 	"github.com/pablintino/automation-executor/logging"
 	"os"
 
@@ -32,94 +30,20 @@ to quickly create a Cobra application.`,
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		executorFactory, err := executors.NewExecutorFactory(&config.ExecutorConfig, &config.ContainerExecutorConfig, logging.Logger)
+		sqlDb, err := db.NewSQLDatabase(&config.DatabaseConfig)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
-		opts := &common.ExecutorOpts{
-			WorkspaceDirectory: "/tmp",
-		}
-		executor, err := executorFactory.GetExecutor(uuid.MustParse("ccb51a13-2b4c-414b-abb0-430dcb40432b"), opts)
+		svc := secrets.NewSecretsService(sqlDb.Secrets(), logging.Logger)
+		model, err := svc.AddSecretToken("test-secret", "secret-value")
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
+		fmt.Println(model)
 
-		var runningCmd common.RunningCommand
-		if executor.Recovered() {
-			runningCmd = recoveredExecutorRun(executor)
-		} else {
-			runningCmd = newExecutorRun(executor)
-		}
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		runningCmdState := runningCmd.State()
-		logging.Logger.Infow(
-			"result",
-			"exitCode", runningCmdState.StatusCode,
-			"finished", runningCmdState.Finished,
-			"error", runningCmdState.Error,
-			"killed", runningCmdState.Killed,
-		)
-
-		err = executor.Destroy()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
 	},
-}
-
-func recoveredExecutorRun(executor common.Executor) common.RunningCommand {
-	cmd := executor.GetRunningCommand(false)
-	if cmd != nil {
-		streams := &common.ExecutorStreams{
-			OutputStream: os.Stdout,
-		}
-		cmd.AttachWait(context.Background(), streams)
-		return cmd
-
-	} else {
-		return executor.GetPreviousRunningCommand(false)
-	}
-}
-
-func newExecutorRun(executor common.Executor) common.RunningCommand {
-	err := executor.Prepare()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	script := `
-max=$((SECONDS + 30))
-count=0
-while [[ ${SECONDS} -le ${max} ]]
-do
-	echo "I am alive $count"
-	sleep 1
-	(( count++ ))
-done
-`
-	execCommand := &common.ExecutorCommand{
-		ImageName: "docker.io/library/debian:bookworm",
-		IsSupport: false,
-		Script:    script,
-		Command:   []string{"/bin/bash"},
-	}
-	streams := &common.ExecutorStreams{
-		OutputStream: os.Stdout,
-	}
-	runnningCmd, err := executor.Execute(context.Background(), execCommand, streams)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	//go timerRoutine(runnningCmd)
-	runnningCmd.Wait()
-	return runnningCmd
 }
 
 func init() {

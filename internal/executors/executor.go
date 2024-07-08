@@ -19,10 +19,11 @@ type ExecutorFactoryImpl struct {
 func NewExecutorFactory(
 	executorConfig *config.ExecutorConfig,
 	containerConfig *config.ContainerExecutorConfig,
+	imageSecretResolver container.ImageSecretResolver,
 	logger *zap.SugaredLogger) (*ExecutorFactoryImpl, error) {
 	instance := &ExecutorFactoryImpl{executorConfig: executorConfig, containerConfig: containerConfig}
 	if executorConfig.Type == config.ExecutorConfigTypeValueContainer {
-		factory, err := container.NewContainerExecutorFactory(containerConfig, logger)
+		factory, err := container.NewContainerExecutorFactory(containerConfig, imageSecretResolver, logger)
 		if err != nil {
 			return nil, err
 		}

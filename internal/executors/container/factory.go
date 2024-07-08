@@ -22,8 +22,9 @@ type supportImageResolver interface {
 
 func NewContainerExecutorFactory(
 	containerConfig *config.ContainerExecutorConfig,
+	imageSecretResolver ImageSecretResolver,
 	logger *zap.SugaredLogger) (*ContainerExecutorFactory, error) {
-	runtime, err := getContainerRuntime(containerConfig)
+	runtime, err := getContainerRuntime(containerConfig, imageSecretResolver)
 	if err != nil {
 		return nil, err
 	}
@@ -38,16 +39,15 @@ func NewContainerExecutorFactory(
 		imageBuilder:    builder,
 		logger:          logger,
 	}, nil
-
 }
 
 func (f *ContainerExecutorFactory) GetExecutor(runId uuid.UUID, opts *common.ExecutorOpts) (common.Executor, error) {
 	return NewContainerExecutor(f.containerConfig, f.runtime, f.imageBuilder, runId, opts, f.logger)
 }
 
-func getContainerRuntime(containerConfig *config.ContainerExecutorConfig) (ContainerRuntime, error) {
+func getContainerRuntime(containerConfig *config.ContainerExecutorConfig, imageSecretResolver ImageSecretResolver) (ContainerRuntime, error) {
 	if containerConfig.Flavor == config.ContainerExecutorConfigFlavorValuePodman {
-		containerRuntime, err := newPodmanRuntime(containerConfig)
+		containerRuntime, err := newPodmanRuntime(containerConfig, imageSecretResolver)
 		if err != nil {
 			return nil, err
 		}

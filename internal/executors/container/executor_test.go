@@ -229,7 +229,7 @@ func assertContainerCommandSuccess(brt *baseRunTest, data *commandData) {
 	}
 }
 
-func assertSuccessOnContainersFinished(brt *baseRunTest) error {
+func assertSuccessOnContainersFinished(brt *baseRunTest) {
 	if brt.testParams.runSupport {
 		assert.NotNil(brt.t, brt.supportCommandData)
 		if brt.supportCommandData != nil {
@@ -242,7 +242,6 @@ func assertSuccessOnContainersFinished(brt *baseRunTest) error {
 			assertContainerCommandSuccess(brt, brt.payloadCommandData)
 		}
 	}
-	return nil
 }
 
 func assertContainerExtraLabels(brt *baseRunTest, cmdData *commandData) {
@@ -277,7 +276,7 @@ func assertKilledContainerOnContainersFinished(brt *baseRunTest, cmdData *comman
 	}
 }
 
-func assertKilledOnContainersFinished(brt *baseRunTest) error {
+func assertKilledOnContainersFinished(brt *baseRunTest) {
 	if brt.testParams.runSupport {
 		assert.NotNil(brt.t, brt.supportCommandData)
 		if brt.supportCommandData != nil {
@@ -290,7 +289,6 @@ func assertKilledOnContainersFinished(brt *baseRunTest) error {
 			assertKilledContainerOnContainersFinished(brt, brt.payloadCommandData)
 		}
 	}
-	return nil
 }
 
 func assertContainerRecovered(brt *baseRunTest, cmdData *commandData) {
@@ -315,7 +313,7 @@ func assertContainerRecovered(brt *baseRunTest, cmdData *commandData) {
 	}
 }
 
-func assertSuccessOnInstantiatePostFromScratchRecover(brt *baseRunTest) error {
+func assertSuccessOnInstantiatePostFromScratchRecover(brt *baseRunTest) {
 	assert.True(brt.t, brt.executor.Recovered())
 	assert.Equal(brt.t, brt.executor.runId, brt.executor.Id())
 
@@ -331,15 +329,13 @@ func assertSuccessOnInstantiatePostFromScratchRecover(brt *baseRunTest) error {
 			assertContainerRecovered(brt, brt.supportCommandData)
 		}
 	}
-	return nil
 }
 
-func commonExecutorOnDestroyStart(brt *baseRunTest) error {
+func commonExecutorOnDestroyStart(brt *baseRunTest) {
 	assert.NotNil(brt.t, brt.executor)
 	if brt.executor != nil {
 		assert.NoError(brt.t, brt.executor.Destroy())
 	}
-	return nil
 }
 
 func TestCommonRunBasedTests(t *testing.T) {
@@ -416,12 +412,11 @@ func TestCommonRunBasedTests(t *testing.T) {
 				},
 				executorOpts:   &common.ExecutorOpts{WorkspaceDirectory: "/tmp/workspace"},
 				onDestroyStart: commonExecutorOnDestroyStart,
-				onContainersRunning: func(brt *baseRunTest) error {
+				onContainersRunning: func(brt *baseRunTest) {
 					assert.NotNil(brt.t, brt.payloadCommandData)
 					if brt.payloadCommandData != nil {
 						assert.NoError(brt.t, brt.payloadCommandData.runningCmd.Kill())
 					}
-					return nil
 				},
 				onContainersFinished: assertKilledOnContainersFinished,
 			},
@@ -451,7 +446,7 @@ func TestCommonRunBasedTests(t *testing.T) {
 				},
 				executorOpts:   &common.ExecutorOpts{WorkspaceDirectory: "/tmp/workspace"},
 				onDestroyStart: commonExecutorOnDestroyStart,
-				onContainersRunning: func(brt *baseRunTest) error {
+				onContainersRunning: func(brt *baseRunTest) {
 					loadedExecutor, err := NewContainerExecutor(
 						brt.executorConfig, brt.runtime, brt.imageResolver,
 						brt.runId, brt.testParams.executorOpts, logging.Logger,
@@ -473,7 +468,6 @@ func TestCommonRunBasedTests(t *testing.T) {
 					if loadedSupportCmd != nil && brt.supportCommandData != nil {
 						assert.Equal(brt.t, brt.supportCommandData.runningCmd.Id(), loadedSupportCmd.Id())
 					}
-					return err
 				},
 			},
 		},
@@ -526,16 +520,16 @@ type executorTestBaseParams struct {
 	executorOpts              *common.ExecutorOpts
 	payloadCmdParams          executorCommandParams
 	supportCmdParams          executorCommandParams
-	onInstantiatePre          func(*baseRunTest) error
-	onInstantiatePost         func(*baseRunTest) error
-	onDestroyStart            func(*baseRunTest) error
-	onDestroyEnd              func(*baseRunTest) error
-	onPrepareStart            func(*baseRunTest) error
-	onPrepareEnd              func(*baseRunTest) error
-	onSupportContainerRunning func(*baseRunTest) error
-	onPayloadContainerRunning func(*baseRunTest) error
-	onContainersRunning       func(*baseRunTest) error
-	onContainersFinished      func(*baseRunTest) error
+	onInstantiatePre          func(*baseRunTest)
+	onInstantiatePost         func(*baseRunTest)
+	onDestroyStart            func(*baseRunTest)
+	onDestroyEnd              func(*baseRunTest)
+	onPrepareStart            func(*baseRunTest)
+	onPrepareEnd              func(*baseRunTest)
+	onSupportContainerRunning func(*baseRunTest)
+	onPayloadContainerRunning func(*baseRunTest)
+	onContainersRunning       func(*baseRunTest)
+	onContainersFinished      func(*baseRunTest)
 }
 
 type commandData struct {
@@ -579,7 +573,7 @@ func (b *baseRunTest) runInstantiate() error {
 		b.executorConfig = &config.ContainerExecutorConfig{}
 	}
 
-	runtime, err := newPodmanRuntime(b.executorConfig)
+	runtime, err := newPodmanRuntime(b.executorConfig, newFakeImageSecretResolver())
 	require.NoError(b.t, err)
 	b.runtime = runtime
 
@@ -589,7 +583,7 @@ func (b *baseRunTest) runInstantiate() error {
 	}
 
 	if b.testParams.onInstantiatePre != nil {
-		assert.NoError(b.t, b.testParams.onInstantiatePre(b))
+		b.testParams.onInstantiatePre(b)
 	}
 
 	executor, err := NewContainerExecutor(b.executorConfig, runtime, b.imageResolver, b.runId, executorOpts, logging.Logger)
@@ -600,7 +594,7 @@ func (b *baseRunTest) runInstantiate() error {
 	b.executor = executor
 
 	if b.testParams.onInstantiatePost != nil {
-		assert.NoError(b.t, b.testParams.onInstantiatePost(b))
+		b.testParams.onInstantiatePost(b)
 	}
 
 	return nil
@@ -608,7 +602,7 @@ func (b *baseRunTest) runInstantiate() error {
 
 func (b *baseRunTest) runPrepare() error {
 	if b.testParams.onPrepareStart != nil {
-		assert.NoError(b.t, b.testParams.onPrepareStart(b))
+		b.testParams.onPrepareStart(b)
 	}
 	err := b.executor.Prepare()
 	assert.NoError(b.t, err)
@@ -618,7 +612,7 @@ func (b *baseRunTest) runPrepare() error {
 	}
 
 	if b.testParams.onPrepareEnd != nil {
-		assert.NoError(b.t, b.testParams.onPrepareEnd(b))
+		b.testParams.onPrepareEnd(b)
 	}
 
 	workspaceVolumes, err := getPodmanVolumesByLabels(map[string]string{
@@ -669,7 +663,8 @@ func (b *baseRunTest) runCommand(commandParams *executorCommandParams) {
 	if commandParams.execCtxTimeout > 0 {
 		ctxTimeout = commandParams.execCtxTimeout
 	}
-	ctx, _ := context.WithTimeout(context.Background(), time.Duration(ctxTimeout)*time.Second)
+	ctx, cancelFn := context.WithTimeout(context.Background(), time.Duration(ctxTimeout)*time.Second)
+	defer cancelFn()
 	runningCmd, err := b.executor.Execute(ctx, cmd, outStreams)
 	assert.NoError(b.t, err)
 	if err != nil {
@@ -685,9 +680,9 @@ func (b *baseRunTest) runCommand(commandParams *executorCommandParams) {
 				b.cleanupRegistry.addContainerFromData(containerInfo)
 			}
 			if cmd.IsSupport && b.testParams.onSupportContainerRunning != nil {
-				assert.NoError(b.t, b.testParams.onPayloadContainerRunning(b))
+				b.testParams.onPayloadContainerRunning(b)
 			} else if !cmd.IsSupport && b.testParams.onPayloadContainerRunning != nil {
-				assert.NoError(b.t, b.testParams.onPayloadContainerRunning(b))
+				b.testParams.onPayloadContainerRunning(b)
 			}
 			if b.testParams.onContainersRunning != nil && !b.containersRunningSignaled.Load() {
 				bothRan := b.payloadCommandData != nil && b.payloadCommandData.containerInfo != nil &&
@@ -738,7 +733,8 @@ func (b *baseRunTest) attachToRunningCmd(commandParams *executorCommandParams) {
 		// so no need to wait for the execution that won't happen
 		return
 	}
-	ctx, _ := context.WithTimeout(context.Background(), time.Duration(ctxTimeout)*time.Second)
+	ctx, cancelFn := context.WithTimeout(context.Background(), time.Duration(ctxTimeout)*time.Second)
+	defer cancelFn()
 	cmdData.runningCmd = runningCmd
 	_ = runningCmd.AttachWait(ctx, outStreams)
 	// Do not assert the returned err, as we may want to check it later
@@ -860,11 +856,11 @@ func (b *baseRunTest) preCreateContainer(containerImage string, cmdData *command
 
 func (b *baseRunTest) destroy() {
 	if b.testParams.onDestroyStart != nil {
-		assert.NoError(b.t, b.testParams.onDestroyStart(b))
+		b.testParams.onDestroyStart(b)
 	}
 	b.cleanupRegistry.cleanup()
 	if b.testParams.onDestroyEnd != nil {
-		assert.NoError(b.t, b.testParams.onDestroyEnd(b))
+		b.testParams.onDestroyEnd(b)
 	}
 }
 

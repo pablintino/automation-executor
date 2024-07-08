@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"github.com/pablintino/automation-executor/internal/utils"
 	"os"
 	"strings"
 
@@ -17,11 +18,12 @@ import (
 )
 
 type podmanRuntime struct {
-	clientCtx context.Context
-	config    *config.ContainerExecutorConfig
+	clientCtx      context.Context
+	config         *config.ContainerExecutorConfig
+	secretResolver ImageSecretResolver
 }
 
-func newPodmanRuntime(executorConfig *config.ContainerExecutorConfig) (*podmanRuntime, error) {
+func newPodmanRuntime(executorConfig *config.ContainerExecutorConfig, secretResolver ImageSecretResolver) (*podmanRuntime, error) {
 	var socket string
 	if executorConfig.Socket != "" {
 		socket = executorConfig.Socket
@@ -40,7 +42,7 @@ func newPodmanRuntime(executorConfig *config.ContainerExecutorConfig) (*podmanRu
 	if err != nil {
 		return nil, err
 	}
-	return &podmanRuntime{clientCtx: clientCtx, config: executorConfig}, nil
+	return &podmanRuntime{clientCtx: clientCtx, config: executorConfig, secretResolver: secretResolver}, nil
 }
 
 func (r *podmanRuntime) CreateVolume(name string, labels map[string]string) (string, error) {
@@ -58,7 +60,7 @@ func (r *podmanRuntime) CreateVolume(name string, labels map[string]string) (str
 func (r *podmanRuntime) DeleteVolume(name string, force bool) error {
 	exists, err := volumes.Exists(r.clientCtx, name, nil)
 	if err != nil {
-
+		return err
 	}
 	if exists {
 		opts := &volumes.RemoveOptions{Force: &force}
@@ -176,7 +178,18 @@ func (r *podmanRuntime) ExistsImage(name string) (bool, error) {
 }
 
 func (r *podmanRuntime) PullImage(name string) error {
-	_, err := images.Pull(r.clientCtx, name, nil)
+	secret, err := r.secretResolver.GetSecretByRegistry(utils.ExtractRegistryNameFromTag(name))
+	if err != nil {
+		return err
+	}
+	opts := &images.PullOptions{
+		SkipTLSVerify: &r.config.SkipRegistryTLS,
+	}
+	if secret != nil {
+		opts.Username = &secret.Key
+		opts.Password = &secret.Value
+	}
+	_, err = images.Pull(r.clientCtx, name, opts)
 	return err
 }
 
