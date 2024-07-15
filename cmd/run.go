@@ -23,7 +23,11 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		logging.Initialize(true)
-		defer logging.Logger.Sync()
+		defer func() {
+			if err := logging.Logger.Sync(); err != nil {
+				fmt.Println(err)
+			}
+		}()
 
 		config, err := config.Configure()
 		if err != nil {

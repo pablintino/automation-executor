@@ -519,7 +519,8 @@ func newContainerAttachedCommandFromContainer(
 		IsSupport: isSupport,
 	}
 	instance := newContainerAttachedCommand(cmdUuid, cmd, container, executor)
-	if err := instance.checkSetStateFromContainerState(); err != nil {
+	instance.setStateFromContainerState()
+	if instance.state.err != nil {
 		return nil, err
 	}
 	if instance.state.finished {
@@ -656,7 +657,7 @@ func (c *containerAttachedCommand) postRunSetState(runErr error) error {
 		}
 
 		if exists {
-			c.checkSetStateFromContainerState()
+			c.setStateFromContainerState()
 		} else {
 			// If the container doesn't exit it's usually because
 			// it has been destroyed underneath
@@ -682,20 +683,19 @@ func (c *containerAttachedCommand) postRunSetState(runErr error) error {
 	return errors.Join(c.state.err, clearErr)
 }
 
-func (c *containerAttachedCommand) checkSetStateFromContainerState() error {
+func (c *containerAttachedCommand) setStateFromContainerState() {
 	state, err := c.executor.runtime.GetState(c.container.Id())
 	if err != nil {
 		// In case we are not able to get the state
 		// consider it as failed for simplicity
 		c.setStateError(err)
-		return err
+		return
 	}
 	currentState := strings.ToLower(state.Status)
 	if currentState == containerStateStopped || currentState == containerStateExited {
 		c.state.code = int(state.ExitCode)
 		c.state.finished = true
 	}
-	return err
 }
 
 func (c *containerAttachedCommand) preFlightCheck() (bool, bool) {

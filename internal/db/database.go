@@ -6,7 +6,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/pablintino/automation-executor/internal/config"
 	"github.com/pablintino/automation-executor/internal/models"
-	"log"
 )
 
 const (
@@ -23,7 +22,6 @@ type SqlDatabase struct {
 func NewSQLDatabase(config *config.DatabaseConfig) (*SqlDatabase, error) {
 	db, err := connect(config)
 	if err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
 	dbX := sqlx.NewDb(db, databaseDriverName)
@@ -38,6 +36,7 @@ func NewSQLDatabase(config *config.DatabaseConfig) (*SqlDatabase, error) {
 type SecretsDb interface {
 	Save(secret *models.SecretModel) (*models.SecretModel, error)
 	Exists(name string) (bool, error)
+	Delete(name string) error
 	SaveRegistrySecret(secret *models.RegistrySecretModel) (*models.RegistrySecretModel, error)
 	GetRegistrySecretByRegistry(registry string) (*models.RegistrySecretModel, error)
 	GetSecretByName(name string) (*models.SecretModel, error)

@@ -11,7 +11,10 @@ import (
 
 const (
 	secretsPgpEncryptValueFormat = "pgp_sym_encrypt(%s, '%s')"
-	secretsPgpDecryptValueFormat = "COALESCE(pgp_sym_decrypt(%s, '%s'), '')"
+	secretsDbColNameTypeId       = "type_id"
+	secretsDbColNameName         = "name"
+	secretsDbColNameSecretKey    = "secret_key"
+	secretsDbColNameSecretValue  = "secret_value"
 )
 
 type sqlSecretsDb struct {
@@ -62,7 +65,7 @@ func (s *sqlSecretsDb) SaveRegistrySecret(secret *models.RegistrySecretModel) (*
 	}
 
 	query := "INSERT INTO secret_registry (type_id, secret_id, registry) VALUES ($1, $2, $3) RETURNING id"
-	rows, err := tx.Query(query, secret.TypeId, secret.Id, secret.Registry)
+	rows, err := tx.Query(query, secret.TypeId, secret.SecretId, secret.Registry)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +74,7 @@ func (s *sqlSecretsDb) SaveRegistrySecret(secret *models.RegistrySecretModel) (*
 		return nil, errors.New("could not insert registry secret")
 	}
 
-	if err = rows.Scan(&secret.Id); err != nil {
+	if err = rows.Scan(&secret.RegistrySecretId); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -81,9 +84,21 @@ func (s *sqlSecretsDb) SaveRegistrySecret(secret *models.RegistrySecretModel) (*
 }
 
 func (s *sqlSecretsDb) GetRegistrySecretByRegistry(registry string) (*models.RegistrySecretModel, error) {
-	query := "SELECT sr.id, sr.type_id, sr.registry, s.name, " +
-		s.getPgpQueryValueDecrypt("secret_key") + "," + s.getPgpQueryValueDecrypt("secret_value") +
-		" FROM secret_registry sr INNER JOIN secret s ON sr.secret_id = s.id WHERE registry = $1"
+	query := strings.Join([]string{
+		"SELECT",
+		NewSqlSelectColumnsBuilder().
+			ForTable("sr").
+			ColumnRenamed("id", "registry_secret_id").
+			Column("registry").
+			ForTable("s").
+			Column(secretsDbColNameTypeId).
+			ColumnRenamed("id", "secret_id").
+			Column(secretsDbColNameName).
+			ColumnPgpEnc(secretsDbColNameSecretKey, secretsDbColNameSecretKey, s.encryptionKey).
+			ColumnPgpEnc("secret_value", "secret_value", s.encryptionKey).
+			Build(),
+		"FROM secret_registry sr INNER JOIN secret s ON sr.secret_id = s.id WHERE registry = $1",
+	}, " ")
 	rows, err := s.db.Queryx(query, registry)
 	if err != nil || !rows.Next() {
 		return nil, err
@@ -104,9 +119,25 @@ func (s *sqlSecretsDb) Exists(name string) (bool, error) {
 	return exists[0], nil
 }
 
+func (s *sqlSecretsDb) Delete(name string) error {
+	// Secret sub-type rows will be deleted by the cascade in each table
+	_, err := s.db.Exec(fmt.Sprintf("DELETE FROM secret WHERE %s=$1", secretsDbColNameName), name)
+	return err
+}
+
 func (s *sqlSecretsDb) GetSecretByName(name string) (*models.SecretModel, error) {
-	query := "SELECT id, type_id, name, " + s.getPgpQueryValueDecrypt("secret_key") +
-		", " + s.getPgpQueryValueDecrypt("secret_value") + " FROM secret WHERE name = $1"
+	query := strings.Join([]string{
+		"SELECT",
+		NewSqlSelectColumnsBuilder().
+			ColumnRenamed("id", "secret_id").
+			Column(secretsDbColNameTypeId).
+			Column(secretsDbColNameName).
+			ColumnPgpEnc(secretsDbColNameSecretKey, secretsDbColNameSecretKey, s.encryptionKey).
+			ColumnPgpEnc(secretsDbColNameSecretValue, secretsDbColNameSecretValue, s.encryptionKey).
+			Build(),
+		"FROM secret WHERE name = $1",
+	}, " ")
+
 	rows, err := s.db.Queryx(query, name)
 	if err != nil || !rows.Next() {
 		return nil, err
@@ -120,11 +151,15 @@ func (s *sqlSecretsDb) GetSecretByName(name string) (*models.SecretModel, error)
 }
 
 func (s *sqlSecretsDb) saveBaseSecret(tx *sqlx.Tx, secret *models.SecretModel) (*models.SecretModel, error) {
-	cols := []string{"name", "type_id", "secret_key"}
-	values := []string{":name", ":type_id", s.getPgpQueryValueEncrypt(":secret_key")}
+	cols := []string{secretsDbColNameName, secretsDbColNameTypeId, secretsDbColNameSecretKey}
+	values := []string{
+		":" + secretsDbColNameName,
+		":" + secretsDbColNameTypeId,
+		s.getPgpQueryValueEncrypt(":" + secretsDbColNameSecretKey),
+	}
 	if secret.Value != "" {
-		cols = append(cols, "secret_value")
-		values = append(values, s.getPgpQueryValueEncrypt(":secret_value"))
+		cols = append(cols, secretsDbColNameSecretValue)
+		values = append(values, s.getPgpQueryValueEncrypt(":"+secretsDbColNameSecretValue))
 	}
 	query := "INSERT INTO secret (" + strings.Join(cols, ",") +
 		") VALUES (" + strings.Join(values, ",") + ") RETURNING id"
@@ -137,7 +172,7 @@ func (s *sqlSecretsDb) saveBaseSecret(tx *sqlx.Tx, secret *models.SecretModel) (
 		return nil, errors.New("could not insert secret")
 	}
 
-	if err := rows.Scan(&secret.Id); err != nil {
+	if err := rows.Scan(&secret.SecretId); err != nil {
 		return nil, err
 	}
 	return secret, err
@@ -145,8 +180,4 @@ func (s *sqlSecretsDb) saveBaseSecret(tx *sqlx.Tx, secret *models.SecretModel) (
 
 func (s *sqlSecretsDb) getPgpQueryValueEncrypt(field string) string {
 	return fmt.Sprintf(secretsPgpEncryptValueFormat, field, s.encryptionKey)
-}
-
-func (s *sqlSecretsDb) getPgpQueryValueDecrypt(field string) string {
-	return fmt.Sprintf(secretsPgpDecryptValueFormat, field, s.encryptionKey) + " as " + field
 }

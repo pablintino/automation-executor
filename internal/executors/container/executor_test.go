@@ -50,7 +50,7 @@ func newCleanupRegistry(t *testing.T, resourcesAlreadyDeleted bool) *cleanupRegi
 }
 
 func (r *cleanupRegistry) addContainerFromData(data map[string]interface{}) {
-	r.addContainer(data["Id"].(string))
+	r.addContainer(data["SecretId"].(string))
 }
 
 func (r *cleanupRegistry) addContainer(id string) {
